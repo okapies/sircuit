@@ -9,6 +9,64 @@ import akka.io.IO
 import TcpPipelineHandler.{Init, WithinActorContext}
 import akka.util.ByteString
 
+object IrcInterfaceActor {
+
+  def props() = Props(classOf[IrcInterfaceActor])
+
+}
+
+class IrcInterfaceActor extends Actor with ActorLogging {
+
+  import Tcp._
+
+  implicit def system = context.system
+
+  private[this] val settings = Settings(system)
+
+  private[this] val endpoint = new InetSocketAddress(settings.IrcHostname, settings.IrcPort)
+
+  IO(Tcp) ! Tcp.Bind(self, endpoint)
+
+  def receive: Receive = {
+    case _: Bound => context.become(bound(sender))
+  }
+
+  def bound(listener: ActorRef): Receive = {
+    case Connected(remote, _) =>
+      log.info("Received connection from {}", remote)
+
+      val connection = sender
+
+      // Registers a handler to the connection
+      val init = TcpPipelineHandler.withLogger(log,
+        new IrcMessageStage >>
+          new StringByteStringAdapter(settings.IrcCharset) >>
+          new DelimiterFraming(
+            maxSize = 512, delimiter = ByteString("\r\n"), includeDelimiter = false) >>
+          new TcpReadWriteAdapter >>
+          // new SslTlsSupport(sslEngine(remote, client = false)) >>
+          new BackpressureBuffer(lowBytes = 50, highBytes = 500, maxBytes = 1000000))
+
+      val addr = remote.getAddress.getHostAddress
+      val port = remote.getPort
+      val handler = context.actorOf(IrcHandler.props(init, connection, remote), s"${addr}_$port")
+      val pipeline = context.actorOf(TcpPipelineHandler.props(init, connection, handler))
+
+      connection ! Register(pipeline)
+  }
+
+}
+
+object IrcHandler {
+
+  def props(
+      init: Init[WithinActorContext, IrcMessage, IrcMessage],
+      connection: ActorRef,
+      remote: InetSocketAddress) =
+    Props(classOf[IrcHandler], init, connection, remote)
+
+}
+
 sealed trait ConnectionState
 case object Registering extends ConnectionState
 case object Registered extends ConnectionState
@@ -17,14 +75,22 @@ case class Client(password: Option[String],
                   nickname: Option[String],
                   username: Option[String])
 
-class IrcHandler(init: Init[WithinActorContext, IrcMessage, IrcMessage], servername: String)
-    extends Actor with FSM[ConnectionState, Client] with ActorLogging {
+class IrcHandler(
+    init: Init[WithinActorContext, IrcMessage, IrcMessage],
+    connection: ActorRef,
+    remote: InetSocketAddress
+  ) extends Actor with FSM[ConnectionState, Client] with ActorLogging {
 
   import Tcp._
 
   implicit def system = context.system
 
   private[this] val settings = Settings(system)
+
+  val servername = settings.IrcHostname
+
+  /* Watches for when the connection dies without sending a Tcp.ConnectionClosed */
+  context watch connection
 
   /* Configures the state machine */
 
@@ -83,7 +149,10 @@ class IrcHandler(init: Init[WithinActorContext, IrcMessage, IrcMessage], servern
       stay()
     case Event(_: ConnectionClosed, _) =>
       log.info("Connection closed")
-      stop() // it calls context.stop(self)
+      stop()
+    case Event(Terminated(`connection`), _) =>
+      log.info("Connection died")
+      stop()
   }
 
   initialize()
@@ -122,64 +191,6 @@ class IrcHandler(init: Init[WithinActorContext, IrcMessage, IrcMessage], servern
    */
   private[this] def closeGracefully() {
     sender ! TcpPipelineHandler.Management(Tcp.Close)
-  }
-
-}
-
-class IrcServiceActor(endpoint: InetSocketAddress) extends Actor with ActorLogging {
-
-  import Tcp._
-
-  implicit def system = context.system
-
-  private[this] val settings = Settings(system)
-
-  IO(Tcp) ! Tcp.Bind(self, endpoint)
-
-  def receive: Receive = {
-    case _: Bound => context.become(bound(sender))
-  }
-
-  def bound(listener: ActorRef): Receive = {
-    case Connected(remote, _) =>
-      log.info("Received connection from {}", remote)
-
-      val connection = sender
-
-      // Registers a handler to the connection
-      val init = TcpPipelineHandler.withLogger(log,
-        new IrcMessageStage >>
-          new StringByteStringAdapter(settings.IrcCharset) >>
-          new DelimiterFraming(
-            maxSize = 512, delimiter = ByteString("\r\n"), includeDelimiter = false) >>
-          new TcpReadWriteAdapter >>
-          // new SslTlsSupport(sslEngine(remote, client = false)) >>
-          new BackpressureBuffer(lowBytes = 50, highBytes = 500, maxBytes = 1000000))
-
-      val addr = remote.getAddress.getHostAddress
-      val port = remote.getPort
-      val handler = context.actorOf(
-        Props(classOf[IrcHandler], init, settings.IrcHostname), s"${addr}_$port")
-      val pipeline = context.actorOf(TcpPipelineHandler.props(init, connection, handler))
-
-      connection ! Register(pipeline)
-  }
-
-}
-
-class IrcMessageStage extends SymmetricPipelineStage[PipelineContext, IrcMessage, String] {
-
-  override def apply(ctx: PipelineContext) = new SymmetricPipePair[IrcMessage, String] {
-
-    override val commandPipeline = { msg: IrcMessage =>
-      ctx.singleCommand(msg.asProtocol + "\r\n")
-    }
-
-    override val eventPipeline = { line: String =>
-      // ignores invalid messages silently
-      IrcMessage(line).map(ctx.singleEvent).getOrElse(ctx.nothing)
-    }
-
   }
 
 }

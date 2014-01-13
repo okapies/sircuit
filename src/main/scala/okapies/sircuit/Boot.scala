@@ -1,12 +1,11 @@
 package okapies.sircuit
 
-import java.net.InetSocketAddress
-
-import akka.actor.{ActorSystem, Props}
+import akka.actor.ActorSystem
 import akka.io.IO
 import spray.can.Http
 
-import irc.IrcServiceActor
+import http.RestInterfaceActor
+import irc.IrcInterfaceActor
 
 object Boot extends App {
 
@@ -15,13 +14,12 @@ object Boot extends App {
 
   private[this] val settings = Settings(system)
 
-  // Http
-  val httpService = system.actorOf(Props[SircuitServiceActor], "http-service")
+  // REST interface
+  val restInterface = system.actorOf(RestInterfaceActor.props(), "rest-interface")
 
-  IO(Http) ! Http.Bind(httpService, interface = "localhost", port = 8080)
+  IO(Http) ! Http.Bind(restInterface, interface = "localhost", port = 8080)
 
-  // IRC
-  val ircEndpoint = new InetSocketAddress(settings.IrcHostname, settings.IrcPort)
-  val ircService = system.actorOf(Props(classOf[IrcServiceActor], ircEndpoint), "IO-IRC")
+  // IRC interface
+  val ircInterface = system.actorOf(IrcInterfaceActor.props(), "irc-interface")
 
 }

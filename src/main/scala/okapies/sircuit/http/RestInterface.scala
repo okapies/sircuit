@@ -1,13 +1,19 @@
-package okapies.sircuit
+package okapies.sircuit.http
 
-import akka.actor.Actor
+import akka.actor.{Actor, Props}
 import spray.routing._
 import spray.http._
 import MediaTypes._
 
+object RestInterfaceActor {
+
+  def props() = Props(classOf[RestInterfaceActor])
+
+}
+
 // we don't implement our route structure directly in the service actor because
 // we want to be able to test it independently, without having to spin up an actor
-class SircuitServiceActor extends Actor with SircuitService {
+class RestInterfaceActor extends Actor with RestInterface {
 
   // the HttpService trait defines only one abstract member, which
   // connects the services environment to the enclosing actor or test
@@ -17,10 +23,11 @@ class SircuitServiceActor extends Actor with SircuitService {
   // other things here, like request stream processing
   // or timeout handling
   def receive = runRoute(route)
+
 }
 
 // this trait defines our service behavior independently from the service actor
-trait SircuitService extends HttpService {
+trait RestInterface extends HttpService {
 
   val route =
     path("") {
@@ -36,4 +43,5 @@ trait SircuitService extends HttpService {
         }
       }
     }
+
 }

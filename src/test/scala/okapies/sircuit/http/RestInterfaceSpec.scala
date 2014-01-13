@@ -1,4 +1,4 @@
-package okapies.sircuit
+package okapies.sircuit.http
 
 import org.scalatest.{FlatSpec, Matchers}
 
@@ -6,7 +6,7 @@ import spray.testkit.ScalatestRouteTest
 import spray.http._
 import StatusCodes._
 
-class SircuitServiceSpec extends FlatSpec with Matchers with ScalatestRouteTest with SircuitService {
+class RestInterfaceSpec extends FlatSpec with Matchers with ScalatestRouteTest with RestInterface {
 
   def actorRefFactory = system
   
