@@ -59,6 +59,14 @@ class IrcInterfaceActor extends Actor with ActorLogging {
 
 object IrcHandler {
 
+  sealed trait State
+  case object Registering extends State
+  case object Registered extends State
+
+  case class Client(password: Option[String],
+                    nickname: Option[String],
+                    username: Option[String])
+
   def props(
       init: Init[WithinActorContext, IrcMessage, IrcMessage],
       connection: ActorRef,
@@ -67,19 +75,13 @@ object IrcHandler {
 
 }
 
-sealed trait ConnectionState
-case object Registering extends ConnectionState
-case object Registered extends ConnectionState
-
-case class Client(password: Option[String],
-                  nickname: Option[String],
-                  username: Option[String])
+import IrcHandler._
 
 class IrcHandler(
     init: Init[WithinActorContext, IrcMessage, IrcMessage],
     connection: ActorRef,
     remote: InetSocketAddress
-  ) extends Actor with FSM[ConnectionState, Client] with ActorLogging {
+  ) extends Actor with FSM[State, Client] with ActorLogging {
 
   import Tcp._
 
