@@ -67,6 +67,7 @@ object IrcHandler {
   case class Client(password: Option[String],
                     nickname: String,
                     username: String,
+                    channels: Set[String],
                     pipeline: Option[ActorRef])
 
   def props(
@@ -100,7 +101,7 @@ class IrcHandler(
 
   /* Configures the state machine */
 
-  startWith(Registering, Client(None, null, null, None))
+  startWith(Registering, Client(None, null, null, Set.empty, None))
 
   when(Registering) {
     case Event(init.Event(IrcMessage(_, "PASS", params)), client) =>
@@ -164,7 +165,8 @@ class IrcHandler(
         send("353", Seq(nickname, "=", s"#$channelName", member.name)) // RPL_NAMREPLY
       }
       send("366", Seq(nickname, s"#$channelName", "End of NAMES list")) // RPL_ENDOFNAMES
-      stay()
+
+      stay using client.copy(channels = client.channels + channelName)
     case Event(init.Event(IrcMessage(_, "PART", params)), client) =>
       validate("PART", params, min = 1) {
         val channels = params(0).split(",")
@@ -177,6 +179,10 @@ class IrcHandler(
         None
       }
       stay()
+    case Event(res: UnsubscribeResponse, client) =>
+      val channelName = res.room.name
+      send(client.nickname, "PART", Seq(s"#$channelName", res.message))
+      stay using client.copy(channels = client.channels - channelName)
     case Event(init.Event(IrcMessage(_, "MODE", params)), client) =>
       // NOTE: This command is currently not supported.
       val channel = params.headOption.getOrElse("*")
@@ -265,13 +271,17 @@ class IrcHandler(
   }
 
   whenUnhandled {
-    case Event(init.Event(IrcMessage(_, "QUIT", params)), _) =>
+    case Event(init.Event(IrcMessage(_, "QUIT", params)), client) =>
       val quitMessage =
         if (params.length > 0) {
           params(0)
         } else {
           ""
         }
+      client.channels.foreach { channel =>
+        gateway ! UnsubscribeRequest(
+          self, RoomId(channel), UserId(client.nickname), quitMessage)
+      }
       send("ERROR", Seq(s"""Closing Link: ("$quitMessage")""")) // acknowledge QUIT command
 
       // sends Close event to keep the connection open to close it gracefully.

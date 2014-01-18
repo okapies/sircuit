@@ -49,11 +49,11 @@ class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
         members -= req.sender
         context unwatch req.sender
 
+        req.sender ! UnsubscribeResponse(roomId, req.message)
         val ad = ClientUnsubscribed(roomId, req.user, req.message)
-        req.sender ! ad
         val isAdvertise = members.filter(_._2.user == req.user).isEmpty
         if (isAdvertise) {
-          members.keys.foreach(_ ! ad)
+          members.keys.filter(_ != req.sender).foreach(_ ! ad)
         }
       } else {
         // NOTE: Send "no such room" instead of "not on the channel"

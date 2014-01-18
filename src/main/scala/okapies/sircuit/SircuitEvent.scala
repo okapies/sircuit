@@ -51,6 +51,10 @@ case class SubscribeResponse(
   members: Set[UserId],
   topic: Option[String]) extends Response
 
+case class UnsubscribeResponse(
+  room: RoomId,
+  message: String) extends Response
+
 trait ErrorResponse extends Response
 
 case class NoSuchRoomError(room: RoomId) extends ErrorResponse
