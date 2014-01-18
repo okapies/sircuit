@@ -28,30 +28,43 @@ class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
       val notification = Notification(req.origin, roomId, req.message)
       members.keys.filter(_ != req.sender).foreach(_ ! notification)
     case req: SubscribeRequest =>
-      members += req.sender -> Member(req.user)
-      context watch req.sender
-      val ad = ClientSubscribed(roomId, req.user)
-      members.keys.foreach { member =>
-        if (member != req.sender) {
-          member ! ad
-        } else {
-          val uniqueMemberIds = members.values.map(_.user).toSet
-          member ! SubscribeResponse(roomId, uniqueMemberIds, topic)
+      if (!members.contains(req.sender)) {
+        members += req.sender -> Member(req.user)
+        context watch req.sender
+
+        val uniqueMemberIds = members.values.map(_.user).toSet
+        req.sender ! SubscribeResponse(roomId, uniqueMemberIds, topic)
+        val ad = ClientSubscribed(roomId, req.user)
+        val isAdvertise = uniqueMemberIds.contains(req.user)
+        if (isAdvertise) {
+          members.keys.filter(_ != req.sender).foreach(_ ! ad)
         }
       }
     case req: UnsubscribeRequest =>
-      members -= req.sender
-      context unwatch req.sender
-      val ad = ClientUnsubscribed(roomId, req.user, req.message)
-      req.sender ! ad
-      members.keys.foreach(_ ! ad)
+      if (members.contains(req.sender)) {
+        members -= req.sender
+        context unwatch req.sender
+
+        val ad = ClientUnsubscribed(roomId, req.user, req.message)
+        req.sender ! ad
+        val isAdvertise = members.filter(_._2.user == req.user).isEmpty
+        if (isAdvertise) {
+          members.keys.foreach(_ ! ad)
+        }
+      }
       terminateIfNoMembers()
     case Terminated(listener) =>
-      val member = members.get(listener)
-      members -= listener
-      member.foreach { member =>
-        val ad = ClientUnsubscribed(roomId, member.user, "Connection reset by peer")
-        members.keys.foreach(_ ! ad)
+      if (members.contains(listener)) {
+        val member = members.get(listener)
+        members -= listener
+
+        member.foreach { member =>
+          val ad = ClientUnsubscribed(roomId, member.user, "Connection reset by peer")
+          val isAdvertise = members.filter(_._2.user == member.user).isEmpty
+          if (isAdvertise) {
+            members.keys.foreach(_ ! ad)
+          }
+        }
       }
       terminateIfNoMembers()
   }
