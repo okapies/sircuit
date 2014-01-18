@@ -18,7 +18,7 @@ class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
 
   private[this] val members = mutable.Map.empty[ActorRef, Member]
 
-  private[this] val topic = Some("room's topic")
+  private[this] var topic: Option[String] = None
 
   def receive: Receive = {
     case req: MessageRequest =>
@@ -27,6 +27,10 @@ class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
     case req: NotificationRequest =>
       val notification = Notification(req.origin, roomId, req.message)
       members.keys.filter(_ != req.sender).foreach(_ ! notification)
+    case req: UpdateTopicRequest =>
+      // TODO: authorize required
+      topic = req.topic
+      members.keys.foreach(_ ! TopicUpdated(roomId, req.user, req.topic))
     case req: SubscribeRequest =>
       if (!members.contains(req.sender)) {
         members += req.sender -> Member(req.user)

@@ -143,13 +143,8 @@ class IrcHandler(
       validate("JOIN", params, min = 1) {
         val channels = params(0).split(",")
         channels.foreach { channel =>
-          if (channel.startsWith("#")) {
-            val target = RoomId(channel.tail)
-            val user = UserId(client.nickname)
-            gateway ! SubscribeRequest(self, target, user)
-          } else {
-            // ERR_NOSUCHCHANNEL
-            send("403", Seq(client.nickname, channel, "No such channel"))
+          validateChannelName(channel) { target =>
+            gateway ! SubscribeRequest(self, RoomId(target), UserId(client.nickname))
           }
         }
         None
@@ -175,13 +170,8 @@ class IrcHandler(
         val channels = params(0).split(",")
         val message = params.applyOrElse(1, (_: Int) => "")
         channels.foreach { channel =>
-          if (channel.startsWith("#")) {
-            val target = RoomId(channel.tail)
-            val user = UserId(client.nickname)
-            gateway ! UnsubscribeRequest(self, target, user, message)
-          } else {
-            // ERR_NOSUCHCHANNEL
-            send("403", Seq(client.nickname, channel, "No such channel"))
+          validateChannelName(channel) { target =>
+            gateway ! UnsubscribeRequest(self, RoomId(target), UserId(client.nickname), message)
           }
         }
         None
@@ -197,7 +187,25 @@ class IrcHandler(
       handleIrcMessageCommand("PRIVMSG", params, client, false)
     case Event(init.Event(IrcMessage(_, "NOTICE", params)), client) =>
       handleIrcMessageCommand("NOTICE", params, client, true)
+    case Event(init.Event(IrcMessage(_, "TOPIC", params)), client) =>
+      validate("TOPIC", params, min = 1) {
+        val channel = params(0)
+        validateChannelName(channel) { target =>
+          val topic = Option(params.applyOrElse(1, (_: Int) => null))
+          gateway ! UpdateTopicRequest(self, RoomId(target), UserId(client.nickname), topic)
+        }
+        None
+      }
+      stay()
   }
+
+  private[this] def validateChannelName(channel: String)(f: String => Unit) =
+    if (channel.startsWith("#")) {
+      f(channel.tail)
+    } else {
+      // ERR_NOSUCHCHANNEL
+      send("403", Seq(stateData.nickname, channel, "No such channel"))
+    }
 
   private[this] def handleIrcMessageCommand(
       command: String, params: Seq[String], client: Client, isNotify: Boolean): State = {
@@ -245,6 +253,14 @@ class IrcHandler(
       stay()
     case Event(ad: ClientUnsubscribed, client) =>
       send(ad.user.name, "PART", Seq(s"#${ad.room.name}", ad.message))
+      stay()
+    case Event(ad: TopicUpdated, client) =>
+      ad.topic match {
+        case Some(topic) =>
+          send(ad.user.name, "TOPIC", Seq(s"#${ad.room.name}", topic))
+        case None =>
+          send(ad.user.name, "TOPIC", Seq(s"#${ad.room.name}"))
+      }
       stay()
   }
 

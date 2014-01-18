@@ -38,6 +38,12 @@ case class UnsubscribeRequest(
   user: UserId,
   message: String) extends Request
 
+case class UpdateTopicRequest(
+  sender: ActorRef,
+  target: Identifier,
+  user: UserId,
+  topic: Option[String]) extends Request
+
 trait Response extends SircuitEvent
 
 case class SubscribeResponse(
@@ -70,8 +76,8 @@ case class ClientUnsubscribed(
   user: UserId,
   message: String) extends Advertisement
 
-case class RoomInfo(
-  name: String,
-  members: Set[UserId],
-  topic: String
+case class TopicUpdated(
+  room: RoomId,
+  user: UserId,
+  topic: Option[String]
 ) extends Advertisement
