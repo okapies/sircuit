@@ -11,11 +11,11 @@ import akka.util.ByteString
 
 object IrcInterfaceActor {
 
-  def props() = Props(classOf[IrcInterfaceActor])
+  def props(gateway: ActorRef) = Props(classOf[IrcInterfaceActor], gateway)
 
 }
 
-class IrcInterfaceActor extends Actor with ActorLogging {
+class IrcInterfaceActor(gateway: ActorRef) extends Actor with ActorLogging {
 
   import Tcp._
 
@@ -49,7 +49,8 @@ class IrcInterfaceActor extends Actor with ActorLogging {
 
       val addr = remote.getAddress.getHostAddress
       val port = remote.getPort
-      val handler = context.actorOf(IrcHandler.props(init, connection, remote), s"${addr}_$port")
+      val handler = context.actorOf(
+        IrcHandler.props(init, connection, remote, gateway), s"${addr}_$port")
       val pipeline = context.actorOf(TcpPipelineHandler.props(init, connection, handler))
 
       connection ! Register(pipeline)
@@ -64,14 +65,16 @@ object IrcHandler {
   case object Registered extends State
 
   case class Client(password: Option[String],
-                    nickname: Option[String],
-                    username: Option[String])
+                    nickname: String,
+                    username: String,
+                    pipeline: Option[ActorRef])
 
   def props(
       init: Init[WithinActorContext, IrcMessage, IrcMessage],
       connection: ActorRef,
-      remote: InetSocketAddress) =
-    Props(classOf[IrcHandler], init, connection, remote)
+      remote: InetSocketAddress,
+      gateway: ActorRef) =
+    Props(classOf[IrcHandler], init, connection, remote, gateway)
 
 }
 
@@ -80,10 +83,11 @@ import IrcHandler._
 class IrcHandler(
     init: Init[WithinActorContext, IrcMessage, IrcMessage],
     connection: ActorRef,
-    remote: InetSocketAddress
+    remote: InetSocketAddress,
+    gateway: ActorRef
   ) extends Actor with FSM[State, Client] with ActorLogging {
 
-  import Tcp._
+  import Tcp.{ConnectionClosed, Message => _}
 
   implicit def system = context.system
 
@@ -96,35 +100,140 @@ class IrcHandler(
 
   /* Configures the state machine */
 
-  startWith(Registering, Client(None, None, None))
+  startWith(Registering, Client(None, null, null, None))
 
   when(Registering) {
-    case Event(init.Event(IrcMessage(_, "PASS", params)), prev) =>
-      validate(params, min = 1) {
-        Some(prev.copy(password = Option(params(0))))
-      }.map(stay().using).getOrElse(stay())
-    case Event(init.Event(IrcMessage(_, "NICK", params)), prev) =>
-      validate(params, min = 1) {
-        Some(prev.copy(nickname = Option(params(0))))
-      }.map(stay().using).getOrElse(stay())
-    case Event(init.Event(IrcMessage(_, "USER", params)), prev) =>
-      validate(params, min = 1) {
-        send("001", Seq(prev.nickname.getOrElse("*"), s"Welcome to $servername."))
-        send("004", Seq(prev.nickname.getOrElse("*"), "localhost", "Sircuit"))
-        /*
-        sendMotd(
-          nick = nick,
-          start = "- Message of the Day -",
-          motd = Seq("- Hello. Welcome to localhost."),
-          end = "End of /MOTD command."
-        )
-        */
-        Some(prev.copy(username = Option(params(0))))
-      }.map(goto(Registered).using).getOrElse(stay())
+    case Event(init.Event(IrcMessage(_, "PASS", params)), client) =>
+      validate("PASS", params, min = 1) {
+        Some(client.copy(password = Option(params(0))))
+      }.map(nextRegisteringState).getOrElse(stay())
+    case Event(init.Event(IrcMessage(_, "NICK", params)), client) =>
+      validate("NICK", params, min = 1) {
+        Some(client.copy(nickname = params(0)))
+      }.map(nextRegisteringState).getOrElse(stay())
+    case Event(init.Event(IrcMessage(_, "USER", params)), client) =>
+      validate("USER", params, min = 1) {
+        // Sircuit doesn't use username, mode and realname.
+        Some(client.copy(username = params(0)))
+      }.map(nextRegisteringState).getOrElse(stay())
   }
 
+  private[this] def nextRegisteringState(client: Client): State =
+    if (client.nickname != null && client.username != null) {
+      send("001", Seq(client.nickname, s"Welcome to the Sircuit"))
+      /*
+      sendMotd(
+        nick = nick,
+        start = "- Message of the Day -",
+        motd = Seq("- Hello. Welcome to localhost."),
+        end = "End of /MOTD command."
+      )
+      */
+      goto(Registered) using client.copy(pipeline = Option(sender))
+    } else {
+      stay() using client
+    }
+
   when(Registered) {
+    handleIrcCommand orElse handleAdvertisement orElse handleErrorResponse
+  }
+
+  def handleIrcCommand: StateFunction = {
     case Event(init.Event(IrcMessage(_, "JOIN", params)), client) =>
+      validate("JOIN", params, min = 1) {
+        val channels = params(0).split(",")
+        channels.foreach { ch =>
+          val channelName = if (ch.startsWith("#")) ch.tail else ch
+          gateway ! SubscribeRequest(self, RoomId(channelName), UserId(client.nickname))
+        }
+        None
+      }
+      stay()
+    case Event(res: SubscribeResponse, client) =>
+      val nickname = client.nickname
+      val channelName = res.room.name
+      send(nickname, "JOIN", Seq(s"#$channelName"))
+      res.topic match {
+        case Some(topic) => // RPL_TOPIC
+          send("332", Seq(nickname, s"#$channelName", topic))
+        case None => // RPL_NOTOPIC
+          send("331", Seq(nickname, s"#$channelName", "No topic is set"))
+      }
+      res.members.foreach { member =>
+        send("353", Seq(nickname, "=", s"#$channelName", member.name)) // RPL_NAMREPLY
+      }
+      send("366", Seq(nickname, s"#$channelName", "End of NAMES list")) // RPL_ENDOFNAMES
+      stay()
+    case Event(init.Event(IrcMessage(_, "PART", params)), client) =>
+      validate("PART", params, min = 1) {
+        val channels = params(0).split(",")
+        val message = params.applyOrElse(1, (_: Int) => "")
+        channels.foreach { ch =>
+          val channelName = if (ch.startsWith("#")) ch.tail else ch
+          gateway ! UnsubscribeRequest(
+            self, RoomId(channelName), UserId(client.nickname), message)
+        }
+        None
+      }
+      stay()
+    case Event(init.Event(IrcMessage(_, "MODE", params)), client) =>
+      // NOTE: This command is currently not supported.
+      val channel = params.headOption.getOrElse("*")
+      // ERR_NOCHANMODES
+      send("477", Seq(client.nickname, channel, "Sircuit doesn't support any channel modes"))
+      stay()
+    case Event(init.Event(IrcMessage(_, "PRIVMSG", params)), client) =>
+      handleIrcMessageCommand("PRIVMSG", params, client, false)
+    case Event(init.Event(IrcMessage(_, "NOTICE", params)), client) =>
+      handleIrcMessageCommand("NOTICE", params, client, true)
+  }
+
+  private[this] def handleIrcMessageCommand(
+      command: String, params: Seq[String], client: Client, isNotify: Boolean): State = {
+    validate(command, params, min = 2) {
+      val name = params(0)
+      val message = params(1)
+      val target = name.head match {
+        case '#' => RoomId(name.tail)
+        case _ => UserId(name)
+      }
+      if (!isNotify) {
+        gateway ! MessageRequest(self, target, UserId(client.nickname), message)
+      } else {
+        gateway ! NotificationRequest(self, target, UserId(client.nickname), message)
+      }
+      None
+    }
+    stay()
+  }
+
+  private[this] def handleErrorResponse: StateFunction = {
+    case Event(res: NoSuchRoomError, client) =>
+      // ERR_NOSUCHCHANNEL
+      send("403", Seq(client.nickname, res.room.name, "No such channel"))
+      stay()
+  }
+
+  private[this] def handleAdvertisement: StateFunction = {
+    case Event(ad: Message, client) =>
+      val target = ad.target match {
+        case UserId(name) => name
+        case RoomId(name) => s"#$name"
+      }
+      send(ad.origin.name, "PRIVMSG", Seq(target, ad.message))
+      stay()
+    case Event(ad: Notification, client) =>
+      val target = ad.target match {
+        case UserId(name) => name
+        case RoomId(name) => s"#$name"
+      }
+      send(ad.origin.name, "NOTICE", Seq(target, ad.message))
+      stay()
+    case Event(ad: ClientSubscribed, client) =>
+      send(ad.user.name, "JOIN", Seq(s"#${ad.room.name}"))
+      stay()
+    case Event(ad: ClientUnsubscribed, client) =>
+      send(ad.user.name, "PART", Seq(s"#${ad.room.name}", ad.message))
       stay()
   }
 
@@ -144,10 +253,22 @@ class IrcHandler(
     case Event(init.Event(IrcMessage(_, command, _)), _) =>
       stateName match {
         case Registering =>
-          send(servername, "451", Seq("*", "You have not registered")) // ERR_NOTREGISTERED
+          // ERR_NOTREGISTERED
+          send(servername, "451", Seq("*", "You have not registered"))
         case _ =>
-          send(servername, "421", Seq(command, s"$command command is unknown by Sircuit"))
+          if (command == "PASS" || command == "NICK" || command == "USER") {
+            // ERR_ALREADYREGISTRED
+            send(servername, "462",
+              Seq(command, s"$command is unauthorized command (already registered)"))
+          } else {
+            // ERR_UNKNOWNCOMMAND
+            send(servername, "421",
+              Seq(command, s"$command is unknown command"))
+          }
       }
+      stay()
+    case Event(evt: SircuitEvent, _) =>
+      log.warning("Unknown event: {}", evt)
       stay()
     case Event(_: ConnectionClosed, _) =>
       log.info("Connection closed")
@@ -161,8 +282,6 @@ class IrcHandler(
 
   /* Utility methods */
 
-  private[this] def send(command: String): Unit = send(IrcMessage(None, command, Nil))
-
   private[this] def send(command: String, params: Seq[String]): Unit =
     send(IrcMessage(None, command, params))
 
@@ -170,8 +289,7 @@ class IrcHandler(
     send(IrcMessage(Option(prefix), command, params))
 
   private[this] def send(msg: IrcMessage): Unit = {
-    log.debug("sending: " + msg.asProtocol)
-    sender ! init.Command(msg)
+    stateData.pipeline.getOrElse(sender) ! init.Command(msg)
   }
 
   private[this] def sendMotd(nick: String, start: String, motd: Seq[String], end: String) = {
@@ -180,11 +298,12 @@ class IrcHandler(
     send("376", Seq(nick, end))
   }
 
-  private[this] def validate[A](params: Seq[String], min: Int)(f: => Option[A]) =
+  private[this] def validate[A](command: String, params: Seq[String], min: Int)(f: => Option[A]) =
     if (params.length >= min) {
       f
     } else {
-      send("461", "PASS", Seq("Not enough parameters")) // ERR_NEEDMOREPARAMS
+      val nickname = Option(stateData.nickname).getOrElse("*")
+      send("461", Seq(nickname, command, "Not enough parameters")) // ERR_NEEDMOREPARAMS
       None
     }
 
@@ -192,7 +311,7 @@ class IrcHandler(
    * You MUST handle `ConnectionClosed` event to stop this actor when use this method.
    */
   private[this] def closeGracefully() {
-    sender ! TcpPipelineHandler.Management(Tcp.Close)
+    stateData.pipeline.getOrElse(sender) ! TcpPipelineHandler.Management(Tcp.Close)
   }
 
 }

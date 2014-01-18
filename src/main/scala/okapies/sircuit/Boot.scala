@@ -14,12 +14,15 @@ object Boot extends App {
 
   private[this] val settings = Settings(system)
 
+  // Gateway service
+  val gateway = system.actorOf(GatewayActor.props(), "service")
+
   // REST interface
-  val restInterface = system.actorOf(RestInterfaceActor.props(), "rest-interface")
+  val restInterface = system.actorOf(RestInterfaceActor.props(gateway), "rest-api")
 
   IO(Http) ! Http.Bind(restInterface, interface = "localhost", port = 8080)
 
   // IRC interface
-  val ircInterface = system.actorOf(IrcInterfaceActor.props(), "irc-interface")
+  val ircInterface = system.actorOf(IrcInterfaceActor.props(gateway), "irc-api")
 
 }

@@ -1,19 +1,19 @@
 package okapies.sircuit.http
 
-import akka.actor.{Actor, Props}
+import akka.actor.{Actor, ActorRef, Props}
 import spray.routing._
 import spray.http._
 import MediaTypes._
 
 object RestInterfaceActor {
 
-  def props() = Props(classOf[RestInterfaceActor])
+  def props(gateway: ActorRef) = Props(classOf[RestInterfaceActor], gateway)
 
 }
 
 // we don't implement our route structure directly in the service actor because
 // we want to be able to test it independently, without having to spin up an actor
-class RestInterfaceActor extends Actor with RestInterface {
+class RestInterfaceActor(gateway: ActorRef) extends Actor with RestInterface {
 
   // the HttpService trait defines only one abstract member, which
   // connects the services environment to the enclosing actor or test
