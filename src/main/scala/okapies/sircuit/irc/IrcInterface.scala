@@ -142,9 +142,15 @@ class IrcHandler(
     case Event(init.Event(IrcMessage(_, "JOIN", params)), client) =>
       validate("JOIN", params, min = 1) {
         val channels = params(0).split(",")
-        channels.foreach { ch =>
-          val channelName = if (ch.startsWith("#")) ch.tail else ch
-          gateway ! SubscribeRequest(self, RoomId(channelName), UserId(client.nickname))
+        channels.foreach { channel =>
+          if (channel.startsWith("#")) {
+            val target = RoomId(channel.tail)
+            val user = UserId(client.nickname)
+            gateway ! SubscribeRequest(self, target, user)
+          } else {
+            // ERR_NOSUCHCHANNEL
+            send("403", Seq(client.nickname, channel, "No such channel"))
+          }
         }
         None
       }
@@ -168,10 +174,15 @@ class IrcHandler(
       validate("PART", params, min = 1) {
         val channels = params(0).split(",")
         val message = params.applyOrElse(1, (_: Int) => "")
-        channels.foreach { ch =>
-          val channelName = if (ch.startsWith("#")) ch.tail else ch
-          gateway ! UnsubscribeRequest(
-            self, RoomId(channelName), UserId(client.nickname), message)
+        channels.foreach { channel =>
+          if (channel.startsWith("#")) {
+            val target = RoomId(channel.tail)
+            val user = UserId(client.nickname)
+            gateway ! UnsubscribeRequest(self, target, user, message)
+          } else {
+            // ERR_NOSUCHCHANNEL
+            send("403", Seq(client.nickname, channel, "No such channel"))
+          }
         }
         None
       }

@@ -51,6 +51,10 @@ class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
         if (isAdvertise) {
           members.keys.foreach(_ ! ad)
         }
+      } else {
+        // NOTE: Send "no such room" instead of "not on the channel"
+        // not to expose what room exists.
+        req.sender ! NoSuchRoomError(roomId)
       }
       terminateIfNoMembers()
     case Terminated(listener) =>
