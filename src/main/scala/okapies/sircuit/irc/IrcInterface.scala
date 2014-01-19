@@ -144,6 +144,8 @@ class IrcHandler(
 
   private[this] def nextRegisteringState(client: Client): State =
     if (client.nickname != null && client.username != null) {
+      gateway ! ClientOnline(self, UserId(client.nickname))
+
       send("001", Seq(client.nickname, s"Welcome to the Sircuit"))
       /*
       sendMotd(
@@ -263,6 +265,10 @@ class IrcHandler(
 
   private[this] def handleIrcQuitCommand: StateFunction = {
     case Event(init.Event(IrcMessage(_, "QUIT", params)), client) =>
+      if (stateName != Registering) {
+        gateway ! ClientOffline(self, UserId(client.nickname))
+      }
+
       // broadcast QUIT message
       val quitMessage = if (params.length > 0) params(0) else ""
       client.channels.foreach { channel =>
@@ -344,7 +350,7 @@ class IrcHandler(
     case Event(ad: ClientUnsubscribed, client) =>
       send(ad.user.name, "PART", Seq(s"#${ad.room.name}", ad.message))
       stay()
-    case Event(ad: TopicUpdated, client) =>
+    case Event(ad: TopicStatus, client) =>
       ad.topic match {
         case Some(topic) =>
           send(ad.user.name, "TOPIC", Seq(s"#${ad.room.name}", topic))
@@ -379,15 +385,20 @@ class IrcHandler(
         stay using client.copy(pingTimer =
           system.scheduler.scheduleOnce(pingFrequency, self, PingTimer(false)))
       } else {
+        log.info("Ping timeout")
+        gateway ! ClientOffline(self, UserId(client.nickname))
+
         send("ERROR", Seq(s"""Closing Link: (Ping timeout)"""))
         closeGracefully()
         stay()
       }
-    case Event(_: ConnectionClosed, _) =>
+    case Event(_: ConnectionClosed, client) =>
       log.info("Connection closed")
+      gateway ! ClientOffline(self, UserId(client.nickname))
       stop()
-    case Event(Terminated(`connection`), _) =>
+    case Event(Terminated(`connection`), client) =>
       log.info("Connection died")
+      gateway ! ClientOffline(self, UserId(client.nickname))
       stop()
   }
 

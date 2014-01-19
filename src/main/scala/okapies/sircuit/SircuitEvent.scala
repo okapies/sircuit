@@ -61,6 +61,8 @@ case class UnsubscribeResponse(
 
 trait ErrorResponse extends Response
 
+case class NoSuchUserError(room: UserId) extends ErrorResponse
+
 case class NoSuchRoomError(room: RoomId) extends ErrorResponse
 
 trait Advertisement extends SircuitEvent
@@ -75,6 +77,14 @@ case class Notification(
   target: Identifier,
   message: String) extends Advertisement
 
+case class ClientOnline(
+  sender: ActorRef,
+  user: UserId) extends Advertisement
+
+case class ClientOffline(
+  sender: ActorRef,
+  user: UserId) extends Advertisement
+
 case class ClientSubscribed(
   room: RoomId,
   user: UserId) extends Advertisement
@@ -84,7 +94,7 @@ case class ClientUnsubscribed(
   user: UserId,
   message: String) extends Advertisement
 
-case class TopicUpdated(
+case class TopicStatus(
   room: RoomId,
   user: UserId,
   topic: Option[String]

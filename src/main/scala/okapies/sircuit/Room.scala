@@ -30,19 +30,22 @@ class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
     case req: UpdateTopicRequest =>
       // TODO: authorization required
       topic = req.topic
-      members.keys.foreach(_ ! TopicUpdated(roomId, req.user, req.topic))
+      members.keys.foreach(_ ! TopicStatus(roomId, req.user, req.topic))
     case req: UserInfoRequest =>
+      // TODO
       val uniqueMembers = members.groupBy(_._2.user).map(_._2.head._2).toSeq
       req.sender ! RoomMembers(roomId, uniqueMembers.map(m => UserInfo(m.user)))
     case req: SubscribeRequest =>
       if (!members.contains(req.sender)) {
-        members += req.sender -> Member(req.user)
+        val user = req.user
+        val prevUniqueMembers: Set[UserId] = members.values.map(_.user).toSet
+        val isAdvertise = !prevUniqueMembers.contains(user)
+
+        members += req.sender -> Member(user)
         context watch req.sender
 
-        val uniqueMemberIds = members.values.map(_.user).toSet
-        req.sender ! SubscribeResponse(roomId, uniqueMemberIds, topic)
-        val ad = ClientSubscribed(roomId, req.user)
-        val isAdvertise = uniqueMemberIds.contains(req.user)
+        req.sender ! SubscribeResponse(roomId, prevUniqueMembers + user, topic)
+        val ad = ClientSubscribed(roomId, user)
         if (isAdvertise) {
           members.keys.filter(_ != req.sender).foreach(_ ! ad)
         }
