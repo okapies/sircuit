@@ -123,10 +123,10 @@ class IrcHandler(
   }
 
   when(Registering, settings.IrcConnectTimeout) {
-    handleRegistering orElse handleUnknownIrcCommand
+    handleIrcRegisterCommand orElse handleIrcQuitCommand orElse handleUnknownIrcCommand
   }
 
-  private[this] def handleRegistering: StateFunction = {
+  private[this] def handleIrcRegisterCommand: StateFunction = {
     case Event(init.Event(IrcMessage(_, "PASS", params)), client) =>
       validate("PASS", params, min = 1) {
         Some(client.copy(password = Option(params(0))))
@@ -162,7 +162,9 @@ class IrcHandler(
     }
 
   when(Registered) {
-    ((handleIrcCommand orElse handleUnknownIrcCommand) andThen { state: State =>
+    ((handleIrcCommand orElse
+      handleIrcQuitCommand orElse
+      handleUnknownIrcCommand) andThen { state: State =>
       // refresh PingTimer when the handler receives IRC commands
       state.stateData.pingTimer.cancel()
       state using state.stateData.copy(pingTimer =
@@ -248,6 +250,21 @@ class IrcHandler(
     stay()
   }
 
+  private[this] def handleIrcQuitCommand: StateFunction = {
+    case Event(init.Event(IrcMessage(_, "QUIT", params)), client) =>
+      // broadcast QUIT message
+      val quitMessage = if (params.length > 0) params(0) else ""
+      client.channels.foreach { channel =>
+        gateway ! UnsubscribeRequest(
+          self, RoomId(channel), UserId(client.nickname), quitMessage)
+      }
+
+      // indicates QUIT command is acknowledged
+      send("ERROR", Seq(s"""Closing Link: ("$quitMessage")"""))
+      closeGracefully()
+      stay()
+  }
+
   private[this] def handleUnknownIrcCommand: StateFunction = {
     case Event(init.Event(IrcMessage(_, command, _)), client) =>
       stateName match {
@@ -331,18 +348,6 @@ class IrcHandler(
   }
 
   private[this] def handleConnectionClose: StateFunction = {
-    case Event(init.Event(IrcMessage(_, "QUIT", params)), client) =>
-      // broadcast QUIT message
-      val quitMessage = if (params.length > 0) params(0) else ""
-      client.channels.foreach { channel =>
-        gateway ! UnsubscribeRequest(
-          self, RoomId(channel), UserId(client.nickname), quitMessage)
-      }
-
-      // indicates QUIT command is acknowledged
-      send("ERROR", Seq(s"""Closing Link: ("$quitMessage")"""))
-      closeGracefully()
-      stay()
     case Event(StateTimeout, client) if stateName == Registering =>
       send("ERROR", Seq(s"""Closing Link: (Ping timeout)"""))
       closeGracefully()
