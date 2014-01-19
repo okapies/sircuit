@@ -28,7 +28,7 @@ class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
       val notification = Notification(req.origin, roomId, req.message)
       members.keys.filter(_ != req.sender).foreach(_ ! notification)
     case req: UpdateTopicRequest =>
-      // TODO: authorize required
+      // TODO: authorization required
       topic = req.topic
       members.keys.foreach(_ ! TopicUpdated(roomId, req.user, req.topic))
     case req: SubscribeRequest =>
