@@ -31,6 +31,9 @@ class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
       // TODO: authorization required
       topic = req.topic
       members.keys.foreach(_ ! TopicUpdated(roomId, req.user, req.topic))
+    case req: UserInfoRequest =>
+      val uniqueMembers = members.groupBy(_._2.user).map(_._2.head._2).toSeq
+      req.sender ! RoomMembers(roomId, uniqueMembers.map(m => UserInfo(m.user)))
     case req: SubscribeRequest =>
       if (!members.contains(req.sender)) {
         members += req.sender -> Member(req.user)

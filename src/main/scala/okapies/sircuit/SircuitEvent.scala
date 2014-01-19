@@ -44,6 +44,10 @@ case class UpdateTopicRequest(
   user: UserId,
   topic: Option[String]) extends Request
 
+case class UserInfoRequest(
+  sender: ActorRef,
+  target: Identifier) extends Request
+
 trait Response extends SircuitEvent
 
 case class SubscribeResponse(
@@ -85,3 +89,9 @@ case class TopicUpdated(
   user: UserId,
   topic: Option[String]
 ) extends Advertisement
+
+case class UserInfo(id: UserId)
+
+case class RoomMembers(
+  room: RoomId,
+  members: Seq[UserInfo]) extends Advertisement

@@ -221,6 +221,17 @@ class IrcHandler(
         None
       }
       stay()
+    case Event(init.Event(IrcMessage(_, "WHO", params)), client) =>
+      validate("WHO", params, min = 1) {
+        val mask = params(0)
+        val target = mask.head match {
+          case '#' => RoomId(mask.tail)
+          case _ => UserId(mask)
+        }
+        gateway ! UserInfoRequest(self, target)
+        None
+      }
+      stay()
   }
 
   private[this] def validateChannelName(channel: String)(f: String => Unit) =
@@ -340,6 +351,15 @@ class IrcHandler(
         case None =>
           send(ad.user.name, "TOPIC", Seq(s"#${ad.room.name}"))
       }
+      stay()
+    case Event(ad: RoomMembers, client) =>
+      val channelName = s"#${ad.room.name}"
+      ad.members foreach { member =>
+        val nickname = member.id.name
+        send(servername, "352", // RPL_WHOREPLY
+          Seq(client.nickname, channelName, "*", "*", "*", nickname, "H", "0 * *"))
+      }
+      send(servername, "315", Seq(client.nickname, channelName, "End of WHO list."))
       stay()
   }
 
