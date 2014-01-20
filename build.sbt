@@ -1,3 +1,5 @@
+import AssemblyKeys._
+
 organization  := "sircuit"
 
 name := "sircuit-server"
@@ -26,3 +28,9 @@ libraryDependencies ++= {
 }
 
 seq(Revolver.settings: _*)
+
+// assembly plugin settings
+
+assemblySettings
+
+mainClass in assembly := Some("okapies.sircuit.Boot")
