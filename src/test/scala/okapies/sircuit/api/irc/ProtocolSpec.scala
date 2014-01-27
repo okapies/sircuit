@@ -1,4 +1,4 @@
-package okapies.sircuit.irc
+package okapies.sircuit.api.irc
 
 import org.scalatest.{Matchers, FlatSpec}
 

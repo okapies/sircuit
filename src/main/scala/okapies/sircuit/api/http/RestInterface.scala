@@ -1,4 +1,4 @@
-package okapies.sircuit.http
+package okapies.sircuit.api.http
 
 import akka.actor.{Actor, ActorRef, Props}
 import spray.routing._

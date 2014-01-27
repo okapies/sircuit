@@ -4,8 +4,8 @@ import akka.actor.ActorSystem
 import akka.io.IO
 import spray.can.Http
 
-import http.RestInterfaceActor
-import irc.IrcInterfaceActor
+import api.http.RestInterfaceActor
+import api.irc.IrcInterfaceActor
 
 object Boot extends App {
 

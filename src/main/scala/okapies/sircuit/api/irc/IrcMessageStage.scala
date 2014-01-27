@@ -1,4 +1,4 @@
-package okapies.sircuit.irc
+package okapies.sircuit.api.irc
 
 import akka.io.{HasLogging, PipelineContext, SymmetricPipelineStage, SymmetricPipePair}
 import akka.util.ByteString

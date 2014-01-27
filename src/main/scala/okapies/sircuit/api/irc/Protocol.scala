@@ -1,4 +1,4 @@
-package okapies.sircuit.irc
+package okapies.sircuit.api.irc
 
 case class IrcMessage(prefix: Option[String], command: String, params: Seq[String]) {
 

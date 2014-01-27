@@ -14,17 +14,17 @@ class SettingsImpl(config: Config) extends Extension {
 
   import scala.concurrent.duration._
 
-  val IrcBindAddress = config.getStringOption("sircuit.irc.bind.address")
+  val IrcBindAddress = config.getStringOption("sircuit.api.irc.bind.address")
 
-  val IrcBindPort = config.getInt("sircuit.irc.bind.port")
+  val IrcBindPort = config.getInt("sircuit.api.irc.bind.port")
 
-  val IrcCharset = config.getString("sircuit.irc.charset")
+  val IrcCharset = config.getString("sircuit.api.irc.charset")
 
-  val IrcConnectTimeout = config.getDuration("sircuit.irc.connect.timeout-sec", SECONDS)
+  val IrcConnectTimeout = config.getDuration("sircuit.api.irc.connect.timeout-sec", SECONDS)
 
-  val IrcConnectPingFrequency = config.getDuration("sircuit.irc.connect.ping-freq-sec", SECONDS)
+  val IrcConnectPingFrequency = config.getDuration("sircuit.api.irc.connect.ping-freq-sec", SECONDS)
 
-  val IrcServername = config.getString("sircuit.irc.servername")
+  val IrcServername = config.getString("sircuit.api.irc.servername")
 
 }
 

@@ -1,5 +1,5 @@
 package okapies.sircuit
-package irc
+package api.irc
 
 import java.net.InetSocketAddress
 
