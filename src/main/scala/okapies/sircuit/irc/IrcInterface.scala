@@ -25,7 +25,10 @@ class IrcInterfaceActor(gateway: ActorRef) extends Actor with ActorLogging {
 
   private[this] val settings = Settings(system)
 
-  private[this] val endpoint = new InetSocketAddress(settings.IrcHostname, settings.IrcPort)
+  private[this] val endpoint = settings.IrcBindAddress match {
+    case Some(hostname) => new InetSocketAddress(hostname, settings.IrcBindPort)
+    case None => new InetSocketAddress(settings.IrcBindPort)
+  }
 
   IO(Tcp) ! Tcp.Bind(self, endpoint)
 
@@ -43,8 +46,10 @@ class IrcInterfaceActor(gateway: ActorRef) extends Actor with ActorLogging {
       val init = TcpPipelineHandler.withLogger(log,
         new IrcMessageStage >>
           new StringByteStringAdapter(settings.IrcCharset) >>
+          // TODO: This is quick fix. Only support LF and CRLF.
+          new RemoveCrStage >>
           new DelimiterFraming(
-            maxSize = 512, delimiter = ByteString("\r\n"), includeDelimiter = false) >>
+            maxSize = 512, delimiter = ByteString("\n"), includeDelimiter = false) >>
           new TcpReadWriteAdapter >>
           // new SslTlsSupport(sslEngine(remote, client = false)) >>
           new BackpressureBuffer(lowBytes = 50, highBytes = 500, maxBytes = 1000000))
@@ -70,7 +75,7 @@ object IrcHandler {
 
   private[irc] case class Client(password: Option[String],
                                  nickname: String,
-                                 username: String,
+                                 isUserAccepted: Boolean,
                                  channels: Set[String],
                                  pingTimer: Cancellable)
 
@@ -107,7 +112,7 @@ class IrcHandler(
 
   private[this] val settings = Settings(system)
 
-  val servername = settings.IrcHostname
+  val servername = settings.IrcServername
 
   val pingFrequency = settings.IrcConnectPingFrequency
 
@@ -116,7 +121,7 @@ class IrcHandler(
 
   /* Configures the state machine */
 
-  startWith(Registering, Client(None, null, null, Set.empty, null))
+  startWith(Registering, Client(None, null, false, Set.empty, null))
 
   override def preStart: Unit = {
     pipeline = Await.result(pipelineFuture, Long.MaxValue.nanoseconds)
@@ -136,17 +141,24 @@ class IrcHandler(
         Some(client.copy(nickname = params(0)))
       }.map(nextRegisteringState).getOrElse(stay())
     case Event(init.Event(IrcMessage(_, "USER", params)), client) =>
-      validate("USER", params, min = 1) {
-        // Sircuit doesn't use username, mode and realname.
-        Some(client.copy(username = params(0)))
-      }.map(nextRegisteringState).getOrElse(stay())
+      // Sircuit doesn't use username, mode and realname.
+      nextRegisteringState(client.copy(isUserAccepted = true))
   }
 
   private[this] def nextRegisteringState(client: Client): State =
-    if (client.nickname != null && client.username != null) {
+    if (client.nickname != null && client.isUserAccepted) {
       gateway ! ClientOnline(self, UserId(client.nickname))
 
-      send("001", Seq(client.nickname, s"Welcome to the Sircuit"))
+      send("001", Seq(client.nickname, "Welcome to the Sircuit Chat Server"))
+      send("002", Seq(client.nickname,
+        s"Your host is $servername, running version sircuit *.*.*"))
+      // RPL_ISUPPORT
+      // see http://tools.ietf.org/html/draft-brocklesby-irc-isupport-03
+      send("005", Seq(client.nickname,
+        "CHANTYPES=# CASEMAPPING=rfc1459",
+        ":are supported by this server"))
+      // some clients recognize '251' following '005' as completion of registration process
+      send("251", Seq(client.nickname, "There are * users and * invisible on * servers"))
       /*
       sendMotd(
         nick = nick,
@@ -291,12 +303,12 @@ class IrcHandler(
         case _ =>
           if (command == "PASS" || command == "NICK" || command == "USER") {
             // ERR_ALREADYREGISTRED
-            send(servername, "462",
-              Seq(command, s"$command is unauthorized command (already registered)"))
+            send(servername, "462", Seq(client.nickname,
+              command, s"$command is unauthorized command (already registered)"))
           } else {
             // ERR_UNKNOWNCOMMAND
-            send(servername, "421",
-              Seq(command, s"$command is unknown command"))
+            send(servername, "421", Seq(client.nickname,
+              command, s"$command is unknown command"))
           }
       }
       stay()
@@ -306,7 +318,8 @@ class IrcHandler(
     case Event(res: SubscribeResponse, client) =>
       val nickname = client.nickname
       val channelName = res.room.name
-      send(nickname, "JOIN", Seq(s"#$channelName"))
+      send(userPrefix(nickname), "JOIN", Seq(s"#$channelName"))
+      send(servername, "MODE", Seq(s"#$channelName", "+ns"))
       res.topic match {
         case Some(topic) => // RPL_TOPIC
           send("332", Seq(nickname, s"#$channelName", topic))
@@ -314,14 +327,14 @@ class IrcHandler(
           send("331", Seq(nickname, s"#$channelName", "No topic is set"))
       }
       res.members.foreach { member =>
-        send("353", Seq(nickname, "=", s"#$channelName", member.name)) // RPL_NAMREPLY
+        send("353", Seq(nickname, "@", s"#$channelName", member.name)) // RPL_NAMREPLY
       }
       send("366", Seq(nickname, s"#$channelName", "End of NAMES list")) // RPL_ENDOFNAMES
 
       stay using client.copy(channels = client.channels + channelName)
     case Event(res: UnsubscribeResponse, client) =>
       val channelName = res.room.name
-      send(client.nickname, "PART", Seq(s"#$channelName", res.message))
+      send(userPrefix(client.nickname), "PART", Seq(s"#$channelName", res.message))
       stay using client.copy(channels = client.channels - channelName)
     case Event(res: NoSuchRoomError, client) =>
       // ERR_NOSUCHCHANNEL
@@ -335,27 +348,27 @@ class IrcHandler(
         case UserId(name) => name
         case RoomId(name) => s"#$name"
       }
-      send(ad.origin.name, "PRIVMSG", Seq(target, ad.message))
+      send(userPrefix(ad.origin.name), "PRIVMSG", Seq(target, ad.message))
       stay()
     case Event(ad: Notification, client) =>
       val target = ad.target match {
         case UserId(name) => name
         case RoomId(name) => s"#$name"
       }
-      send(ad.origin.name, "NOTICE", Seq(target, ad.message))
+      send(userPrefix(ad.origin.name), "NOTICE", Seq(target, ad.message))
       stay()
     case Event(ad: ClientSubscribed, client) =>
-      send(ad.user.name, "JOIN", Seq(s"#${ad.room.name}"))
+      send(userPrefix(ad.user.name), "JOIN", Seq(s"#${ad.room.name}"))
       stay()
     case Event(ad: ClientUnsubscribed, client) =>
-      send(ad.user.name, "PART", Seq(s"#${ad.room.name}", ad.message))
+      send(userPrefix(ad.user.name), "PART", Seq(s"#${ad.room.name}", ad.message))
       stay()
     case Event(ad: TopicStatus, client) =>
       ad.topic match {
         case Some(topic) =>
-          send(ad.user.name, "TOPIC", Seq(s"#${ad.room.name}", topic))
+          send(userPrefix(ad.user.name), "TOPIC", Seq(s"#${ad.room.name}", topic))
         case None =>
-          send(ad.user.name, "TOPIC", Seq(s"#${ad.room.name}"))
+          send(userPrefix(ad.user.name), "TOPIC", Seq(s"#${ad.room.name}"))
       }
       stay()
     case Event(ad: RoomMembers, client) =>
@@ -363,7 +376,7 @@ class IrcHandler(
       ad.members foreach { member =>
         val nickname = member.id.name
         send(servername, "352", // RPL_WHOREPLY
-          Seq(client.nickname, channelName, "*", "*", "*", nickname, "H", "0 * *"))
+          Seq(client.nickname, channelName, nickname, "*", servername, nickname, "H", s"0 $nickname"))
       }
       send(servername, "315", Seq(client.nickname, channelName, "End of WHO list."))
       stay()
@@ -436,6 +449,8 @@ class IrcHandler(
       send("461", Seq(nickname, command, "Not enough parameters")) // ERR_NEEDMOREPARAMS
       None
     }
+
+  private[this] def userPrefix(nickname: String) = s"$nickname!$nickname@*"
 
   /**
    * You MUST handle `ConnectionClosed` event to stop this actor when use this method.

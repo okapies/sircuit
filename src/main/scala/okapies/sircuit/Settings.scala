@@ -1,6 +1,6 @@
 package okapies.sircuit
 
-import com.typesafe.config.Config
+import com.typesafe.config.{Config, ConfigException}
 
 import akka.actor.ActorSystem
 import akka.actor.Extension
@@ -14,17 +14,17 @@ class SettingsImpl(config: Config) extends Extension {
 
   import scala.concurrent.duration._
 
-  val IrcHostname = config.getString("sircuit.irc.hostname")
+  val IrcBindAddress = config.getStringOption("sircuit.irc.bind.address")
 
-  val IrcPort = config.getInt("sircuit.irc.port")
+  val IrcBindPort = config.getInt("sircuit.irc.bind.port")
 
   val IrcCharset = config.getString("sircuit.irc.charset")
 
-  val IrcConnectTimeout =
-    getDuration(config.getLong("sircuit.irc.connect.timeout-sec"), SECONDS)
+  val IrcConnectTimeout = config.getDuration("sircuit.irc.connect.timeout-sec", SECONDS)
 
-  val IrcConnectPingFrequency =
-    getDuration(config.getLong("sircuit.irc.connect.ping-freq-sec"), SECONDS)
+  val IrcConnectPingFrequency = config.getDuration("sircuit.irc.connect.ping-freq-sec", SECONDS)
+
+  val IrcServername = config.getString("sircuit.irc.servername")
 
 }
 
@@ -42,11 +42,26 @@ object Settings extends ExtensionId[SettingsImpl] with ExtensionIdProvider {
    */
   override def get(system: ActorSystem): SettingsImpl = super.get(system)
 
-  private[sircuit] def getDuration(length: Long, timeunit: TimeUnit): FiniteDuration =
-    if (length > 0) {
-      FiniteDuration(length, timeunit)
-    } else {
-      FiniteDuration(Long.MaxValue, NANOSECONDS)
+  private[sircuit] implicit class ConfigOps(val underlying: Config) extends AnyVal {
+
+    def getDuration(path: String, timeunit: TimeUnit): FiniteDuration = {
+      val length = underlying.getLong(path)
+      if (length > 0) {
+        FiniteDuration(length, timeunit)
+      } else {
+        FiniteDuration(Long.MaxValue, NANOSECONDS)
+      }
     }
+
+    def getStringOption(path: String) = toOption[String](underlying.getString(path))
+
+    private def toOption[A](v: => A): Option[A] =
+      try {
+        Option(v)
+      } catch {
+        case e: ConfigException.Missing => None
+      }
+
+  }
 
 }
