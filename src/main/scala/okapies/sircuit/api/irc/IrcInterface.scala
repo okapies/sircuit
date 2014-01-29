@@ -222,7 +222,16 @@ class IrcHandler(
           case _ if target == client.nickname => send(client.nickname, "MODE", params)
           case _ =>
             // ERR_USERSDONTMATCH
-            send(servername, "502", Seq("Cannot change mode for other users"))
+            send(servername, "502", Seq(client.nickname, "Cannot change mode for other users"))
+        }
+        None
+      }
+      stay()
+    case Event(init.Event(IrcMessage(_, "USERHOST", params)), client) =>
+      validate("USERHOST", params, min = 1) {
+        // RPL_USERHOST with invalid hostname
+        params.foreach { nickname =>
+          send(servername, "302", Seq(client.nickname, s"$nickname=+$nickname@*"))
         }
         None
       }
