@@ -149,16 +149,19 @@ class IrcHandler(
     if (client.nickname != null && client.isUserAccepted) {
       gateway ! ClientOnline(self, UserId(client.nickname))
 
-      send("001", Seq(client.nickname, "Welcome to the Sircuit Chat Server"))
-      send("002", Seq(client.nickname,
+      // TODO: send full welcome messages
+      send(servername, "001", Seq(client.nickname, "Welcome to the Sircuit Chat Server"))
+      send(servername, "002", Seq(client.nickname,
         s"Your host is $servername, running version sircuit *.*.*"))
       // RPL_ISUPPORT
       // see http://tools.ietf.org/html/draft-brocklesby-irc-isupport-03
-      send("005", Seq(client.nickname,
-        "CHANTYPES=# CASEMAPPING=rfc1459",
+      send(servername, "005", Seq(client.nickname,
+        "PREFIX=(ov)@+ CHANTYPES=# MODES=3 NICKLEN=16 TOPICLEN=255 "
+          + "CHANMODES=,,,inpst CASEMAPPING=rfc1459", //
         ":are supported by this server"))
       // some clients recognize '251' following '005' as completion of registration process
-      send("251", Seq(client.nickname, "There are * users and * invisible on * servers"))
+      send(servername, "251",
+        Seq(client.nickname, "There are * users and * invisible on * servers"))
       /*
       sendMotd(
         nick = nick,
@@ -211,10 +214,18 @@ class IrcHandler(
       }
       stay()
     case Event(init.Event(IrcMessage(_, "MODE", params)), client) =>
-      // NOTE: This command is currently not supported.
-      val channel = params.headOption.getOrElse("*")
-      // ERR_NOCHANMODES
-      send("477", Seq(client.nickname, channel, "Sircuit doesn't support any channel modes"))
+      validate("MODE", params, min = 1) {
+        // ignores MODE command for both user and channel
+        val target = params(0)
+        target.head match {
+          case '#' => send(userPrefix(client.nickname), "MODE", params)
+          case _ if target == client.nickname => send(client.nickname, "MODE", params)
+          case _ =>
+            // ERR_USERSDONTMATCH
+            send(servername, "502", Seq("Cannot change mode for other users"))
+        }
+        None
+      }
       stay()
     case Event(init.Event(IrcMessage(_, "PING", params)), client) =>
       send(servername, "PONG", params)
@@ -253,7 +264,7 @@ class IrcHandler(
       f(channel.tail)
     } else {
       // ERR_NOSUCHCHANNEL
-      send("403", Seq(stateData.nickname, channel, "No such channel"))
+      send(servername, "403", Seq(stateData.nickname, channel, "No such channel"))
     }
 
   private[this] def handleIrcMessageCommand(
@@ -319,17 +330,16 @@ class IrcHandler(
       val nickname = client.nickname
       val channelName = res.room.name
       send(userPrefix(nickname), "JOIN", Seq(s"#$channelName"))
-      send(servername, "MODE", Seq(s"#$channelName", "+ns"))
       res.topic match {
         case Some(topic) => // RPL_TOPIC
-          send("332", Seq(nickname, s"#$channelName", topic))
+          send(servername, "332", Seq(nickname, s"#$channelName", topic))
         case None => // RPL_NOTOPIC
-          send("331", Seq(nickname, s"#$channelName", "No topic is set"))
+          send(servername, "331", Seq(nickname, s"#$channelName", "No topic is set"))
       }
       res.members.foreach { member =>
-        send("353", Seq(nickname, "@", s"#$channelName", member.name)) // RPL_NAMREPLY
+        send(servername, "353", Seq(nickname, "@", s"#$channelName", member.name)) // RPL_NAMREPLY
       }
-      send("366", Seq(nickname, s"#$channelName", "End of NAMES list")) // RPL_ENDOFNAMES
+      send(servername, "366", Seq(nickname, s"#$channelName", "End of NAMES list")) // RPL_ENDOFNAMES
 
       stay using client.copy(channels = client.channels + channelName)
     case Event(res: UnsubscribeResponse, client) =>
@@ -338,7 +348,7 @@ class IrcHandler(
       stay using client.copy(channels = client.channels - channelName)
     case Event(res: NoSuchRoomError, client) =>
       // ERR_NOSUCHCHANNEL
-      send("403", Seq(client.nickname, res.room.name, "No such channel"))
+      send(servername, "403", Seq(client.nickname, res.room.name, "No such channel"))
       stay()
   }
 
@@ -436,9 +446,9 @@ class IrcHandler(
   }
 
   private[this] def sendMotd(nick: String, start: String, motd: Seq[String], end: String) = {
-    send("375", Seq(nick, start))
+    send(servername, "375", Seq(nick, start))
     motd foreach (line => send("372", Seq(nick, line)))
-    send("376", Seq(nick, end))
+    send(servername, "376", Seq(nick, end))
   }
 
   private[this] def validate[A](command: String, params: Seq[String], min: Int)(f: => Option[A]) =
@@ -446,7 +456,7 @@ class IrcHandler(
       f
     } else {
       val nickname = Option(stateData.nickname).getOrElse("*")
-      send("461", Seq(nickname, command, "Not enough parameters")) // ERR_NEEDMOREPARAMS
+      send(servername, "461", Seq(nickname, command, "Not enough parameters")) // ERR_NEEDMOREPARAMS
       None
     }
 
