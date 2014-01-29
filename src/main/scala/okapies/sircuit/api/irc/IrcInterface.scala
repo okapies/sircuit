@@ -218,7 +218,7 @@ class IrcHandler(
         // ignores MODE command for both user and channel
         val target = params(0)
         target.head match {
-          case '#' => send(userPrefix(client.nickname), "MODE", params)
+          case '#' => send(clientPrefix, "MODE", params)
           case _ if target == client.nickname => send(client.nickname, "MODE", params)
           case _ =>
             // ERR_USERSDONTMATCH
@@ -230,8 +230,12 @@ class IrcHandler(
     case Event(init.Event(IrcMessage(_, "USERHOST", params)), client) =>
       validate("USERHOST", params, min = 1) {
         // RPL_USERHOST with invalid hostname
-        params.foreach { nickname =>
-          send(servername, "302", Seq(client.nickname, s"$nickname=+$nickname@*"))
+        params.foreach {
+          case nickname if nickname == client.nickname =>
+            val host = remote.getAddress.getHostAddress
+            send(servername, "302", Seq(client.nickname, s"$nickname=+$nickname@$host"))
+          case nickname =>
+            send(servername, "302", Seq(client.nickname, s"$nickname=+$nickname@*"))
         }
         None
       }
@@ -338,7 +342,7 @@ class IrcHandler(
     case Event(res: SubscribeResponse, client) =>
       val nickname = client.nickname
       val channelName = res.room.name
-      send(userPrefix(nickname), "JOIN", Seq(s"#$channelName"))
+      send(clientPrefix, "JOIN", Seq(s"#$channelName"))
       res.topic match {
         case Some(topic) => // RPL_TOPIC
           send(servername, "332", Seq(nickname, s"#$channelName", topic))
@@ -353,7 +357,7 @@ class IrcHandler(
       stay using client.copy(channels = client.channels + channelName)
     case Event(res: UnsubscribeResponse, client) =>
       val channelName = res.room.name
-      send(userPrefix(client.nickname), "PART", Seq(s"#$channelName", res.message))
+      send(clientPrefix, "PART", Seq(s"#$channelName", res.message))
       stay using client.copy(channels = client.channels - channelName)
     case Event(res: NoSuchRoomError, client) =>
       // ERR_NOSUCHCHANNEL
@@ -469,7 +473,11 @@ class IrcHandler(
       None
     }
 
-  private[this] def userPrefix(nickname: String) = s"$nickname!$nickname@*"
+  private[this] def userPrefix(nickname: String): String = userPrefix(nickname, "*")
+
+  private[this] def userPrefix(nickname: String, host: String) = s"$nickname!$nickname@$host"
+
+  private[this] def clientPrefix = userPrefix(stateData.nickname, remote.getAddress.getHostAddress)
 
   /**
    * You MUST handle `ConnectionClosed` event to stop this actor when use this method.
