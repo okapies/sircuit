@@ -52,7 +52,7 @@ class IrcInterfaceActor(gateway: ActorRef) extends Actor with ActorLogging {
             maxSize = 512, delimiter = ByteString("\n"), includeDelimiter = false) >>
           new TcpReadWriteAdapter >>
           // new SslTlsSupport(sslEngine(remote, client = false)) >>
-          new BackpressureBuffer(lowBytes = 50, highBytes = 500, maxBytes = 1000000))
+          new BackpressureBuffer(lowBytes = 100, highBytes = 1000, maxBytes = 1000000))
 
       val addr = remote.getAddress.getHostAddress
       val port = remote.getPort
@@ -150,18 +150,23 @@ class IrcHandler(
       gateway ! ClientOnline(self, UserId(client.nickname))
 
       // TODO: send full welcome messages
-      send(servername, "001", Seq(client.nickname, "Welcome to the Sircuit Chat Server"))
-      send(servername, "002", Seq(client.nickname,
-        s"Your host is $servername, running version sircuit *.*.*"))
+      val nickname = client.nickname
+      send(servername, "001", Seq(nickname, "Welcome to the Sircuit Chat Server"))
+      send(servername, "002", Seq(nickname,
+        s"Your host is $servername, running version sircuit ?.?.?"))
+      send(servername, "003", Seq(nickname,
+        "This server was created ??? ??? ?? ???? at ??:??:?? ???"))
+      // some clients require '004' to know completion of registration
+      send(servername, "004", Seq(nickname, s"$servername ?.?.? i npst"))
       // RPL_ISUPPORT
       // see http://tools.ietf.org/html/draft-brocklesby-irc-isupport-03
-      send(servername, "005", Seq(client.nickname,
-        "PREFIX=(ov)@+ CHANTYPES=# MODES=3 NICKLEN=16 TOPICLEN=255 "
+      send(servername, "005", Seq(nickname,
+        "PREFIX= CHANTYPES=# MODES=3 NICKLEN=16 TOPICLEN=255 "
           + "CHANMODES=,,,inpst CASEMAPPING=rfc1459", //
         ":are supported by this server"))
-      // some clients recognize '251' following '005' as completion of registration process
+      // some clients require '251' following '005' to know completion of registration
       send(servername, "251",
-        Seq(client.nickname, "There are * users and * invisible on * servers"))
+        Seq(nickname, "There are ? users and ? invisible on ? servers"))
       /*
       sendMotd(
         nick = nick,
