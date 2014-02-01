@@ -4,14 +4,13 @@ package api.irc
 import java.net.InetSocketAddress
 
 import scala.concurrent.{Await, Future, promise}
+import scala.concurrent.duration._
 
 import akka.actor._
 import akka.io._
 import akka.io.IO
 import TcpPipelineHandler.{Init, WithinActorContext}
 import akka.util.ByteString
-
-import okapies.sircuit.{Event => SircuitEvent}
 
 object IrcInterfaceActor {
 
@@ -78,7 +77,7 @@ object IrcHandler {
   private[irc] case class Client(password: Option[String],
                                  nickname: String,
                                  isUserAccepted: Boolean,
-                                 channels: Set[String],
+                                 joinedChannels: Set[String],
                                  pingTimer: Cancellable)
 
   private[irc] case class PingTimer(active: Boolean)
@@ -103,8 +102,8 @@ class IrcHandler(
     gateway: ActorRef
   ) extends Actor with FSM[State, Client] with ActorLogging {
 
-  import scala.concurrent.duration._
   import Tcp.{ConnectionClosed, Message => _}
+  import okapies.sircuit.{Event => SircuitEvent}
 
   private[this] val system = context.system
 
@@ -114,26 +113,50 @@ class IrcHandler(
 
   private[this] val settings = Settings(system)
 
-  val servername = settings.IrcServername
+  private[this] val servername = settings.IrcServername
 
-  val pingFrequency = settings.IrcConnectPingFrequency
+  private[this] val pingFrequency = settings.IrcConnectPingFrequency
 
   /* Watches for when the connection dies without sending a Tcp.ConnectionClosed */
   context watch connection
 
-  /* Configures the state machine */
-
-  startWith(Registering, Client(None, null, false, Set.empty, null))
-
-  override def preStart: Unit = {
+  override def preStart(): Unit = {
     pipeline = Await.result(pipelineFuture, Long.MaxValue.nanoseconds)
   }
 
+  /* Configures the state machine */
+
+  startWith(
+    Registering,
+    Client(
+      password = None,
+      nickname = null,
+      isUserAccepted = false,
+      joinedChannels = Set.empty,
+      pingTimer = null))
+
   when(Registering, settings.IrcConnectTimeout) {
-    handleIrcRegisterCommand orElse handleIrcQuitCommand orElse handleUnknownIrcCommand
+    handleIrcRegistrationCommand   orElse
+    handleNoIrcRegistrationCommand orElse
+    handleRegistrationTimeout
   }
 
-  private[this] def handleIrcRegisterCommand: StateFunction = {
+  when(Registered) {
+    handleIrcCommandAndResetPingTimer orElse
+    handleIrcCommandResponse          orElse
+    handleAdvertisementEvent          orElse
+    handlePingTimerEvent
+  }
+
+  whenUnhandled {
+    handleConnectionClose orElse
+    handleUnknownEvent    orElse
+    handleBackpressureBufferEvent
+  }
+
+  /* Event handler implementations */
+
+  private[this] def handleIrcRegistrationCommand: StateFunction = ({
     case Event(init.Event(IrcMessage(_, "PASS", params)), client) =>
       validate("PASS", params, min = 1) {
         Some(client.copy(password = Option(params(0))))
@@ -145,7 +168,7 @@ class IrcHandler(
     case Event(init.Event(IrcMessage(_, "USER", params)), client) =>
       // Sircuit doesn't use username, mode and realname.
       nextRegisteringState(client.copy(isUserAccepted = true))
-  }
+  }: StateFunction) orElse handleIrcQuitCommand
 
   private[this] def nextRegisteringState(client: Client): State =
     if (client.nickname != null && client.isUserAccepted) {
@@ -180,21 +203,36 @@ class IrcHandler(
 
       // start PingTimer
       goto(Registered) using client.copy(pingTimer =
-        system.scheduler.scheduleOnce(pingFrequency, self, PingTimer(true)))
+        system.scheduler.scheduleOnce(pingFrequency, self, PingTimer(active = true)))
     } else {
       stay() using client
     }
 
-  when(Registered) {
-    ((handleIrcCommand orElse
-      handleIrcQuitCommand orElse
-      handleUnknownIrcCommand) andThen { state: State =>
-      // refresh PingTimer when the handler receives IRC commands
-      state.stateData.pingTimer.cancel()
-      state using state.stateData.copy(pingTimer =
-        system.scheduler.scheduleOnce(pingFrequency, self, PingTimer(true)))
-    }) orElse handleIrcCommandResponse orElse handleAdvertisement
+  private[this] def handleNoIrcRegistrationCommand: StateFunction = {
+    case Event(init.Event(IrcMessage(_, command, _)), client) =>
+      // ERR_NOTREGISTERED
+      send(servername, "451", Seq("*", "You have not registered"))
+      stay()
   }
+
+  private[this] def handleRegistrationTimeout: StateFunction = {
+    case Event(StateTimeout, client) =>
+      send("ERROR", Seq(s"""Closing Link: (Ping timeout)"""))
+      closeGracefully()
+      stay()
+  }
+
+  private[this] def handleIrcCommandAndResetPingTimer: StateFunction =
+    (
+      handleIrcCommand     orElse
+      handleIrcQuitCommand orElse
+      handleUnknownIrcCommand
+    ) andThen { state: State => // reset pingTimer when receive any IRC commands
+      val client = state.stateData
+      client.pingTimer.cancel()
+      state using client.copy(pingTimer =
+        system.scheduler.scheduleOnce(pingFrequency, self, PingTimer(active = true)))
+    }
 
   private[this] def handleIrcCommand: StateFunction = {
     case Event(init.Event(IrcMessage(_, "JOIN", params)), client) =>
@@ -308,15 +346,20 @@ class IrcHandler(
 
   private[this] def handleIrcQuitCommand: StateFunction = {
     case Event(init.Event(IrcMessage(_, "QUIT", params)), client) =>
-      if (stateName != Registering) {
-        gateway ! ClientOffline(self, UserId(client.nickname))
-      }
-
-      // broadcast QUIT message
       val quitMessage = if (params.length > 0) params(0) else ""
-      client.channels.foreach { channel =>
-        gateway ! UnsubscribeRequest(
-          self, RoomId(channel), UserId(client.nickname), quitMessage)
+
+      stateName match {
+        case Registering =>
+          // do nothing because this client is not registered yet.
+        case _ =>
+          // broadcast unsubscribe message
+          client.joinedChannels.foreach { channel =>
+            gateway ! UnsubscribeRequest(
+              self, RoomId(channel), UserId(client.nickname), quitMessage)
+          }
+
+          // notify service this client goes offline
+          gateway ! ClientOffline(self, UserId(client.nickname))
       }
 
       // indicates QUIT command is acknowledged
@@ -327,20 +370,14 @@ class IrcHandler(
 
   private[this] def handleUnknownIrcCommand: StateFunction = {
     case Event(init.Event(IrcMessage(_, command, _)), client) =>
-      stateName match {
-        case Registering =>
-          // ERR_NOTREGISTERED
-          send(servername, "451", Seq("*", "You have not registered"))
-        case _ =>
-          if (command == "PASS" || command == "NICK" || command == "USER") {
-            // ERR_ALREADYREGISTRED
-            send(servername, "462", Seq(client.nickname,
-              command, s"$command is unauthorized command (already registered)"))
-          } else {
-            // ERR_UNKNOWNCOMMAND
-            send(servername, "421", Seq(client.nickname,
-              command, s"$command is unknown command"))
-          }
+      if (command == "PASS" || command == "NICK" || command == "USER") {
+        // ERR_ALREADYREGISTRED
+        send(servername, "462", Seq(client.nickname,
+          command, s"$command is unauthorized command (already registered)"))
+      } else {
+        // ERR_UNKNOWNCOMMAND
+        send(servername, "421", Seq(client.nickname,
+          command, s"$command is unknown command"))
       }
       stay()
   }
@@ -357,22 +394,24 @@ class IrcHandler(
           send(servername, "331", Seq(nickname, s"#$channelName", "No topic is set"))
       }
       res.members.foreach { member =>
-        send(servername, "353", Seq(nickname, "@", s"#$channelName", member.name)) // RPL_NAMREPLY
+        // RPL_NAMREPLY
+        send(servername, "353", Seq(nickname, "@", s"#$channelName", member.name))
       }
-      send(servername, "366", Seq(nickname, s"#$channelName", "End of NAMES list")) // RPL_ENDOFNAMES
+      // RPL_ENDOFNAMES
+      send(servername, "366", Seq(nickname, s"#$channelName", "End of NAMES list"))
 
-      stay using client.copy(channels = client.channels + channelName)
+      stay using client.copy(joinedChannels = client.joinedChannels + channelName)
     case Event(res: UnsubscribeResponse, client) =>
       val channelName = res.room.name
       send(clientPrefix, "PART", Seq(s"#$channelName", res.message))
-      stay using client.copy(channels = client.channels - channelName)
+      stay using client.copy(joinedChannels = client.joinedChannels - channelName)
     case Event(res: NoSuchRoomError, client) =>
       // ERR_NOSUCHCHANNEL
       send(servername, "403", Seq(client.nickname, res.room.name, "No such channel"))
       stay()
   }
 
-  private[this] def handleAdvertisement: StateFunction = {
+  private[this] def handleAdvertisementEvent: StateFunction = {
     case Event(ad: Message, client) =>
       val target = ad.target match {
         case UserId(name) => name
@@ -405,28 +444,21 @@ class IrcHandler(
       val channelName = s"#${ad.room.name}"
       ad.members foreach { member =>
         val nickname = member.id.name
-        send(servername, "352", // RPL_WHOREPLY
-          Seq(client.nickname, channelName, nickname, "*", servername, nickname, "H", s"0 $nickname"))
+        // RPL_WHOREPLY
+        send(servername, "352", Seq(client.nickname,
+          channelName, nickname, "*", servername, nickname, "H", s"0 $nickname"))
       }
       send(servername, "315", Seq(client.nickname, channelName, "End of WHO list."))
       stay()
   }
 
-  whenUnhandled {
-    handleConnectionClose orElse handleUnknownEvent
-  }
-
-  private[this] def handleConnectionClose: StateFunction = {
-    case Event(StateTimeout, client) if stateName == Registering =>
-      send("ERROR", Seq(s"""Closing Link: (Ping timeout)"""))
-      closeGracefully()
-      stay()
-    case Event(PingTimer(alive), client) if stateName == Registered =>
-      if (alive) {
+  private[this] def handlePingTimerEvent: StateFunction = {
+    case Event(PingTimer(active), client) =>
+      if (active) {
         send("PING", Seq(servername))
-        // refresh PingTimer to wait PONG from the client
+        // reset pingTimer to wait PONG from the client
         stay using client.copy(pingTimer =
-          system.scheduler.scheduleOnce(pingFrequency, self, PingTimer(false)))
+          system.scheduler.scheduleOnce(pingFrequency, self, PingTimer(active = false)))
       } else {
         log.info("Ping timeout")
         gateway ! ClientOffline(self, UserId(client.nickname))
@@ -435,6 +467,9 @@ class IrcHandler(
         closeGracefully()
         stay()
       }
+  }
+
+  private[this] def handleConnectionClose: StateFunction = {
     case Event(_: ConnectionClosed, client) =>
       log.info("Connection closed")
       gateway ! ClientOffline(self, UserId(client.nickname))
@@ -443,6 +478,16 @@ class IrcHandler(
       log.info("Connection died")
       gateway ! ClientOffline(self, UserId(client.nickname))
       stop()
+  }
+
+  private[this] def handleBackpressureBufferEvent: StateFunction = {
+    // TODO: do nothing at this time
+    case _: BackpressureBuffer.HighWatermarkReached =>
+      log.debug("the buffer's high watermark has been reached.")
+      stay()
+    case _: BackpressureBuffer.LowWatermarkReached =>
+      log.debug("the buffer’s fill level falls below the low watermark.")
+      stay()
   }
 
   private[this] def handleUnknownEvent: StateFunction = {
@@ -480,9 +525,7 @@ class IrcHandler(
       None
     }
 
-  private[this] def userPrefix(nickname: String): String = userPrefix(nickname, "*")
-
-  private[this] def userPrefix(nickname: String, host: String) = s"$nickname!$nickname@$host"
+  private[this] def userPrefix(nickname: String, host: String = "*") = s"$nickname!$nickname@$host"
 
   private[this] def clientPrefix = userPrefix(stateData.nickname, remote.getAddress.getHostAddress)
 

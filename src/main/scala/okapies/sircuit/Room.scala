@@ -1,12 +1,11 @@
 package okapies.sircuit
 
+import scala.collection.immutable
 import scala.collection.mutable
 
 import akka.actor._
 
 object RoomActor {
-
-  case class Member(user: UserId)
 
   def props(id: RoomId) = Props(classOf[RoomActor], id)
 
@@ -14,73 +13,84 @@ object RoomActor {
 
 class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
 
-  import RoomActor._
-
-  private[this] val members = mutable.Map.empty[ActorRef, Member]
+  private[this] val members = mutable.Map.empty[UserId, immutable.Set[ActorRef]]
 
   private[this] var topic: Option[String] = None
+
+  private[this] def clients: Seq[ActorRef] = members.values.flatten.toSeq
 
   def receive: Receive = {
     case req: MessageRequest =>
       val message = Message(req.origin, roomId, req.message)
-      members.keys.filter(_ != req.sender).foreach(_ ! message)
+      clients.filter(_ != req.sender).foreach(_ ! message)
     case req: NotificationRequest =>
       val notification = Notification(req.origin, roomId, req.message)
-      members.keys.filter(_ != req.sender).foreach(_ ! notification)
+      clients.filter(_ != req.sender).foreach(_ ! notification)
     case req: UpdateTopicRequest =>
       // TODO: authorization required
       topic = req.topic
-      members.keys.foreach(_ ! TopicStatus(roomId, req.user, req.topic))
+      clients.foreach(_ ! TopicStatus(roomId, req.user, req.topic))
     case req: UserInfoRequest =>
-      // TODO
-      val uniqueMembers = members.groupBy(_._2.user).map(_._2.head._2).toSeq
-      req.sender ! RoomMembers(roomId, uniqueMembers.map(m => UserInfo(m.user)))
+      req.sender ! RoomMembers(roomId, members.keys.map(userId => UserInfo(userId)).toSet)
     case req: SubscribeRequest =>
-      if (!members.contains(req.sender)) {
-        val user = req.user
-        val prevUniqueMembers: Set[UserId] = members.values.map(_.user).toSet
+      val sender = req.sender
+      val user = req.user
+      if (!clients.contains(sender)) {
+        val prevUniqueMembers = members.keys.toSet
         val isAdvertise = !prevUniqueMembers.contains(user)
 
-        members += req.sender -> Member(user)
-        context watch req.sender
+        addClient(user, sender)
+        context watch sender
 
-        req.sender ! SubscribeResponse(roomId, prevUniqueMembers + user, topic)
-        val ad = ClientSubscribed(roomId, user)
+        sender ! SubscribeResponse(roomId, prevUniqueMembers + user, topic)
         if (isAdvertise) {
-          members.keys.filter(_ != req.sender).foreach(_ ! ad)
+          val ad = ClientSubscribed(roomId, user)
+          clients.filter(_ != sender).foreach(_ ! ad)
         }
       }
     case req: UnsubscribeRequest =>
-      if (members.contains(req.sender)) {
-        members -= req.sender
-        context unwatch req.sender
+      val sender = req.sender
+      val user = req.user
+      if (clients.contains(sender)) {
+        removeClient(user, sender)
+        context unwatch sender
 
-        req.sender ! UnsubscribeResponse(roomId, req.message)
-        val ad = ClientUnsubscribed(roomId, req.user, req.message)
-        val isAdvertise = members.filter(_._2.user == req.user).isEmpty
+        sender ! UnsubscribeResponse(roomId, req.message)
+        val ad = ClientUnsubscribed(roomId, user, req.message)
+        val isAdvertise = !members.contains(user)
         if (isAdvertise) {
-          members.keys.filter(_ != req.sender).foreach(_ ! ad)
+          clients.filter(_ != sender).foreach(_ ! ad)
         }
       } else {
         // NOTE: Send "no such room" instead of "not on the channel"
         // not to expose what room exists.
-        req.sender ! NoSuchRoomError(roomId)
+        sender ! NoSuchRoomError(roomId)
       }
       terminateIfNoMembers()
     case Terminated(listener) =>
-      if (members.contains(listener)) {
-        val member = members.get(listener)
-        members -= listener
-
-        member.foreach { member =>
-          val ad = ClientUnsubscribed(roomId, member.user, "Connection reset by peer")
-          val isAdvertise = members.filter(_._2.user == member.user).isEmpty
-          if (isAdvertise) {
-            members.keys.foreach(_ ! ad)
-          }
+      val users = members.filter(_._2.contains(listener))
+      users.foreach { case (user, _) => // users.size should be 1
+        removeClient(user, listener)
+        val isAdvertise = !members.contains(user)
+        if (isAdvertise) {
+          val ad = ClientUnsubscribed(roomId, user, "Connection reset by peer")
+          clients.foreach(_ ! ad)
         }
       }
       terminateIfNoMembers()
+  }
+
+  private[this] def addClient(user: UserId, client: ActorRef) = {
+    val clients = members.get(user).getOrElse(Set.empty)
+    members.put(user, clients + sender)
+  }
+
+  private[this] def removeClient(user: UserId, client: ActorRef) = {
+    val clients = members.get(user).getOrElse(Set.empty)
+    clients - client match {
+      case cs if cs.isEmpty => members.remove(user)
+      case cs => members.put(user, cs)
+    }
   }
 
   private[this] def terminateIfNoMembers() =

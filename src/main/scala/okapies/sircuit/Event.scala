@@ -104,4 +104,4 @@ case class UserInfo(id: UserId)
 
 case class RoomMembers(
   room: RoomId,
-  members: Seq[UserInfo]) extends Advertisement
+  members: Set[UserInfo]) extends Advertisement

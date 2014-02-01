@@ -24,13 +24,17 @@ class UserActor extends Actor with ActorLogging {
     case req: MessageRequest =>
       req.target match {
         case user: UserId =>
-          users.get(user).foreach(_.foreach(_ ! Message(req.origin, user, req.message)))
+          users.get(user).foreach { clients =>
+            clients.foreach(_ ! Message(req.origin, user, req.message))
+          }
         case _ =>
       }
     case req: NotificationRequest =>
       req.target match {
         case user: UserId =>
-          users.get(user).foreach(_.foreach(_ ! Notification(req.origin, user, req.message)))
+          users.get(user).foreach { clients =>
+            clients.foreach(_ ! Notification(req.origin, user, req.message))
+          }
         case _ =>
       }
     case Terminated(client) =>
