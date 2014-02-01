@@ -7,7 +7,7 @@ case class IrcMessage(prefix: Option[String], command: String, params: Seq[Strin
     command +
     params.init.map(" " + _).mkString +
     params.lastOption.map(p =>
-      if (p.contains(" ")) {
+      if (p.contains(" ") || p.startsWith(":")) {
         " :" + p
       } else {
         " " + p
