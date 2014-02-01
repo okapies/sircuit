@@ -19,7 +19,9 @@ class ProtocolSpec extends FlatSpec with Matchers {
     IrcMessage("COMMAND param1 param2 :Hello, world!") shouldBe
       Some(IrcMessage(None, "COMMAND", Seq("param1", "param2", "Hello, world!")))
 
-    IrcMessage("COMMAND ::Hello!") shouldBe Some(IrcMessage(None, "COMMAND", Seq(":Hello!")))
+    IrcMessage("COMMAND :") shouldBe Some(IrcMessage(None, "COMMAND", Seq("")))
+    IrcMessage("COMMAND param1 :") shouldBe Some(IrcMessage(None, "COMMAND", Seq("param1", "")))
+    IrcMessage("COMMAND param1 ::Hello!") shouldBe Some(IrcMessage(None, "COMMAND", Seq("param1", ":Hello!")))
   }
 
   it should "fail when message lines are invalid" in {

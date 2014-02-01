@@ -22,7 +22,7 @@ object IrcMessage {
 
   private[this] val Command = "^([a-zA-Z]+|[0-9]{3}+)(.+)?$".r
 
-  private[this] val Params = "^(?: (?!:)(.+?))?(?: [:](.+))?$".r
+  private[this] val Params = "^(?: (?!:)(.+?))?(?: [:](.*))?$".r
 
   def apply(line: String): Option[IrcMessage] = line match {
     case Prefix(prefix, rest) => parseCommand(Option(prefix), rest)
