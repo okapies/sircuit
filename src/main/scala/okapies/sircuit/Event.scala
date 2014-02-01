@@ -8,9 +8,9 @@ case class UserId(name: String) extends Identifier
 
 case class RoomId(name: String) extends Identifier
 
-trait SircuitEvent
+trait Event
 
-trait Request extends SircuitEvent {
+trait Request extends Event {
   def sender: ActorRef
   def target: Identifier
 }
@@ -48,7 +48,7 @@ case class UserInfoRequest(
   sender: ActorRef,
   target: Identifier) extends Request
 
-trait Response extends SircuitEvent
+trait Response extends Event
 
 case class SubscribeResponse(
   room: RoomId,
@@ -65,7 +65,7 @@ case class NoSuchUserError(room: UserId) extends ErrorResponse
 
 case class NoSuchRoomError(room: RoomId) extends ErrorResponse
 
-trait Advertisement extends SircuitEvent
+trait Advertisement extends Event
 
 case class Message(
   origin: UserId,

@@ -11,6 +11,8 @@ import akka.io.IO
 import TcpPipelineHandler.{Init, WithinActorContext}
 import akka.util.ByteString
 
+import okapies.sircuit.{Event => SircuitEvent}
+
 object IrcInterfaceActor {
 
   def props(gateway: ActorRef) = Props(classOf[IrcInterfaceActor], gateway)
