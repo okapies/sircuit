@@ -6,12 +6,15 @@ import spray.testkit.ScalatestRouteTest
 import spray.http._
 import StatusCodes._
 
+import okapies.sircuit.{Identifier, UserId}
+
 class RestInterfaceSpec extends FlatSpec with Matchers with ScalatestRouteTest with RestInterface {
 
   def actorRefFactory = system
   
   behavior of "SircuitService"
 
+/*
   it should "return a greeting for GET requests to the root path" in {
     Get() ~> route ~> check {
       responseAs[String] should include("Say hello")
@@ -30,5 +33,10 @@ class RestInterfaceSpec extends FlatSpec with Matchers with ScalatestRouteTest w
       responseAs[String] shouldBe "HTTP method not allowed, supported methods: GET"
     }
   }
+*/
+
+  def sendMessage(target: Identifier, origin: UserId, message: String) = ???
+
+  def sendNotification(target: Identifier, origin: UserId, message: String) = ???
 
 }

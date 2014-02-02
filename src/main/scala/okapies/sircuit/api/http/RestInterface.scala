@@ -5,6 +5,8 @@ import spray.routing._
 import spray.http._
 import MediaTypes._
 
+import okapies.sircuit._
+
 object RestInterfaceActor {
 
   def props(gateway: ActorRef) = Props(classOf[RestInterfaceActor], gateway)
@@ -24,24 +26,43 @@ class RestInterfaceActor(gateway: ActorRef) extends Actor with RestInterface {
   // or timeout handling
   def receive = runRoute(route)
 
+  def sendMessage(target: Identifier, origin: UserId, message: String) =
+    gateway ! MessageRequest(self, target, origin, message)
+
+  def sendNotification(target: Identifier, origin: UserId, message: String) =
+    gateway ! NotificationRequest(self, target, origin, message)
+
 }
 
 // this trait defines our service behavior independently from the service actor
 trait RestInterface extends HttpService {
 
-  val route =
-    path("") {
-      get {
-        respondWithMediaType(`text/html`) { // XML is marshalled to `text/xml` by default, so we simply override here
+  val route = roomRoute
+
+  def roomRoute: Route =
+    path("room" / Segment / "message") { roomId =>
+      ((get | put) & parameters('auth_token, 'message)) { (auth_token, message) =>
+        respondWithMediaType(`application/json`) {
           complete {
-            <html>
-              <body>
-                <h1>Say hello to <i>spray-routing</i> on <i>spray-can</i>!</h1>
-              </body>
-            </html>
+            sendMessage(RoomId(roomId), UserId(auth_token), message)
+            "{result: \"ok\"}"
+          }
+        }
+      }
+    } ~
+    path("room" / Segment / "notification") { roomId =>
+      ((get | put) & parameters('auth_token, 'message)) { (auth_token, message) =>
+        respondWithMediaType(`application/json`) {
+          complete {
+            sendMessage(RoomId(roomId), UserId(auth_token), message)
+            "{result: \"ok\"}"
           }
         }
       }
     }
+
+  def sendMessage(target: Identifier, origin: UserId, message: String): Unit
+
+  def sendNotification(target: Identifier, origin: UserId, message: String): Unit
 
 }
