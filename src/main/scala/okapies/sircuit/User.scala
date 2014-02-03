@@ -25,7 +25,8 @@ class UserActor extends Actor with ActorLogging {
       req.target match {
         case user: UserId =>
           users.get(user).foreach { clients =>
-            clients.foreach(_ ! Message(req.origin, user, req.message))
+            val time = System.currentTimeMillis()
+            clients.foreach(_ ! Message(time, req.origin, user, req.message))
           }
         case _ =>
       }
@@ -33,7 +34,8 @@ class UserActor extends Actor with ActorLogging {
       req.target match {
         case user: UserId =>
           users.get(user).foreach { clients =>
-            clients.foreach(_ ! Notification(req.origin, user, req.message))
+            val time = System.currentTimeMillis()
+            clients.foreach(_ ! Notification(time, req.origin, user, req.message))
           }
         case _ =>
       }

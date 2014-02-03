@@ -21,17 +21,21 @@ class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
 
   def receive: Receive = {
     case req: MessageRequest =>
-      val message = Message(req.origin, roomId, req.message)
+      val time = System.currentTimeMillis()
+      val message = Message(time, req.origin, roomId, req.message)
       clients.filter(_ != req.sender).foreach(_ ! message)
     case req: NotificationRequest =>
-      val notification = Notification(req.origin, roomId, req.message)
+      val time = System.currentTimeMillis()
+      val notification = Notification(time, req.origin, roomId, req.message)
       clients.filter(_ != req.sender).foreach(_ ! notification)
     case req: UpdateTopicRequest =>
       // TODO: authorization required
+      val time = System.currentTimeMillis()
       topic = req.topic
-      clients.foreach(_ ! TopicStatus(roomId, req.user, req.topic))
+      clients.foreach(_ ! TopicStatus(time, roomId, req.user, req.topic))
     case req: UserInfoRequest =>
-      req.sender ! RoomMembers(roomId, members.keys.map(userId => UserInfo(userId)).toSet)
+      val time = System.currentTimeMillis()
+      req.sender ! RoomMembers(time, roomId, members.keys.map(userId => UserInfo(userId)).toSet)
     case req: SubscribeRequest =>
       val sender = req.sender
       val user = req.user
@@ -44,7 +48,8 @@ class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
 
         sender ! SubscribeResponse(roomId, prevUniqueMembers + user, topic)
         if (isAdvertise) {
-          val ad = ClientSubscribed(roomId, user)
+          val time = System.currentTimeMillis()
+          val ad = ClientSubscribed(time, roomId, user)
           clients.filter(_ != sender).foreach(_ ! ad)
         }
       }
@@ -56,7 +61,8 @@ class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
         context unwatch sender
 
         sender ! UnsubscribeResponse(roomId, req.message)
-        val ad = ClientUnsubscribed(roomId, user, req.message)
+        val time = System.currentTimeMillis()
+        val ad = ClientUnsubscribed(time, roomId, user, req.message)
         val isAdvertise = !members.contains(user)
         if (isAdvertise) {
           clients.filter(_ != sender).foreach(_ ! ad)
@@ -73,7 +79,8 @@ class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
         removeClient(user, listener)
         val isAdvertise = !members.contains(user)
         if (isAdvertise) {
-          val ad = ClientUnsubscribed(roomId, user, "Connection reset by peer")
+          val time = System.currentTimeMillis()
+          val ad = ClientUnsubscribed(time, roomId, user, "Connection reset by peer")
           clients.foreach(_ ! ad)
         }
       }

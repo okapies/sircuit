@@ -68,11 +68,13 @@ case class NoSuchRoomError(room: RoomId) extends ErrorResponse
 trait Advertisement extends Event
 
 case class Message(
+  time: Long,
   origin: UserId,
   target: Identifier,
   message: String) extends Advertisement
 
 case class Notification(
+  time: Long,
   origin: UserId,
   target: Identifier,
   message: String) extends Advertisement
@@ -86,15 +88,18 @@ case class ClientOffline(
   user: UserId) extends Advertisement
 
 case class ClientSubscribed(
+  time: Long,
   room: RoomId,
   user: UserId) extends Advertisement
 
 case class ClientUnsubscribed(
+  time: Long,
   room: RoomId,
   user: UserId,
   message: String) extends Advertisement
 
 case class TopicStatus(
+  time: Long,
   room: RoomId,
   user: UserId,
   topic: Option[String]
@@ -103,5 +108,6 @@ case class TopicStatus(
 case class UserInfo(id: UserId)
 
 case class RoomMembers(
+  time: Long,
   room: RoomId,
   members: Set[UserInfo]) extends Advertisement
