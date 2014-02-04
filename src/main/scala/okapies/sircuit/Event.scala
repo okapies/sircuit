@@ -65,6 +65,20 @@ case class NoSuchUserError(room: UserId) extends ErrorResponse
 
 case class NoSuchRoomError(room: RoomId) extends ErrorResponse
 
+trait UserStatus
+
+case class ClientOnline(
+  sender: ActorRef,
+  user: UserId) extends UserStatus
+
+case class ClientAway(
+  sender: ActorRef,
+  user: UserId) extends UserStatus
+
+case class ClientOffline(
+  sender: ActorRef,
+  user: UserId) extends UserStatus
+
 trait Advertisement extends Event
 
 case class Message(
@@ -78,14 +92,6 @@ case class Notification(
   origin: UserId,
   target: Identifier,
   message: String) extends Advertisement
-
-case class ClientOnline(
-  sender: ActorRef,
-  user: UserId) extends Advertisement
-
-case class ClientOffline(
-  sender: ActorRef,
-  user: UserId) extends Advertisement
 
 case class ClientSubscribed(
   time: Long,

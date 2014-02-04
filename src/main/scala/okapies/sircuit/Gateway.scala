@@ -38,8 +38,8 @@ class GatewayActor extends Actor with ActorLogging {
         room forward req
       case UserId(name) => userActor forward req
     }
-    case ad: ClientOnline => userActor forward ad
-    case ad: ClientOffline => userActor forward ad
+    case stat: ClientOnline => userActor forward stat
+    case stat: ClientOffline => userActor forward stat
     case Terminated(room) =>
       rooms.find(_._2 == room).foreach { case (roomId, _) =>
         rooms -= roomId

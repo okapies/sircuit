@@ -15,12 +15,12 @@ class UserActor extends Actor with ActorLogging {
   private[this] val users = mutable.Map.empty[UserId, Seq[ActorRef]]
 
   def receive: Receive = {
-    case ad: ClientOnline =>
-      registerClient(ad.sender, ad.user)
-      context watch ad.sender
-    case ad: ClientOffline =>
-      unregisterClient(ad.sender, ad.user)
-      context unwatch ad.sender
+    case stat: ClientOnline =>
+      registerClient(stat.sender, stat.user)
+      context watch stat.sender
+    case stat: ClientOffline =>
+      unregisterClient(stat.sender, stat.user)
+      context unwatch stat.sender
     case req: MessageRequest =>
       req.target match {
         case user: UserId =>
