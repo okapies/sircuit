@@ -77,7 +77,7 @@ object IrcHandler {
   private[irc] case class Client(password: Option[String],
                                  nickname: String,
                                  isUserAccepted: Boolean,
-                                 joinedChannels: Set[String],
+                                 joinedChannels: Map[String, ActorRef],
                                  pingTimer: Cancellable)
 
   private[irc] case class PingTimer(active: Boolean)
@@ -132,7 +132,7 @@ class IrcHandler(
       password = None,
       nickname = null,
       isUserAccepted = false,
-      joinedChannels = Set.empty,
+      joinedChannels = Map.empty,
       pingTimer = null))
 
   when(Registering, settings.IrcConnectTimeout) {
@@ -238,10 +238,15 @@ class IrcHandler(
     case Event(init.Event(IrcMessage(_, "JOIN", params)), client) =>
       validate("JOIN", params, min = 1) {
         val channels = params(0).split(",")
-        channels.foreach { channel =>
-          validateChannelName(channel) { target =>
-            gateway ! SubscribeRequest(self, RoomId(target), UserId(client.nickname))
-          }
+        val nickname = client.nickname
+        channels.foreach { channel => channel.head match {
+          case '#' =>
+            val target = channel.tail
+            gateway ! SubscribeRequest(self, RoomId(target), UserId(nickname))
+          case _ =>
+            // ERR_NOSUCHCHANNEL
+            send(servername, "403", Seq(nickname, channel, "No such channel"))
+        }
         }
         None
       }
@@ -251,8 +256,9 @@ class IrcHandler(
         val channels = params(0).split(",")
         val message = params.applyOrElse(1, (_: Int) => "")
         channels.foreach { channel =>
-          validateChannelName(channel) { target =>
-            gateway ! UnsubscribeRequest(self, RoomId(target), UserId(client.nickname), message)
+          val target = extractChannelName(channel)
+          sendRoomRequest(client.joinedChannels, target) {
+            _ ! UnsubscribeRequest(self, RoomId(target), UserId(client.nickname), message)
           }
         }
         None
@@ -296,10 +302,10 @@ class IrcHandler(
       handleIrcMessageCommand("NOTICE", params, client, true)
     case Event(init.Event(IrcMessage(_, "TOPIC", params)), client) =>
       validate("TOPIC", params, min = 1) {
-        val channel = params(0)
-        validateChannelName(channel) { target =>
-          val topic = Option(params.applyOrElse(1, (_: Int) => null))
-          gateway ! UpdateTopicRequest(self, RoomId(target), UserId(client.nickname), topic)
+        val target = extractChannelName(params(0))
+        val topic = Option(params.applyOrElse(1, (_: Int) => null))
+        sendRoomRequest(client.joinedChannels, target) {
+          _ ! UpdateTopicRequest(self, RoomId(target), UserId(client.nickname), topic)
         }
         None
       }
@@ -307,37 +313,47 @@ class IrcHandler(
     case Event(init.Event(IrcMessage(_, "WHO", params)), client) =>
       validate("WHO", params, min = 1) {
         val mask = params(0)
-        val target = mask.head match {
-          case '#' => RoomId(mask.tail)
-          case _ => UserId(mask)
+        mask.head match {
+          case '#' =>
+            val target = extractChannelName(mask)
+            sendRoomRequest(client.joinedChannels, target) {
+              _ ! UserInfoRequest(self, RoomId(target))
+            }
+          case _ =>
+            val target = mask
+            gateway ! UserInfoRequest(self, UserId(target))
         }
-        gateway ! UserInfoRequest(self, target)
         None
       }
       stay()
   }
-
-  private[this] def validateChannelName(channel: String)(f: String => Unit) =
-    if (channel.startsWith("#")) {
-      f(channel.tail)
-    } else {
-      // ERR_NOSUCHCHANNEL
-      send(servername, "403", Seq(stateData.nickname, channel, "No such channel"))
-    }
 
   private[this] def handleIrcMessageCommand(
       command: String, params: Seq[String], client: Client, isNotify: Boolean): State = {
     validate(command, params, min = 2) {
       val name = params(0)
       val message = params(1)
-      val target = name.head match {
-        case '#' => RoomId(name.tail)
-        case _ => UserId(name)
-      }
-      if (!isNotify) {
-        gateway ! MessageRequest(self, target, UserId(client.nickname), message)
-      } else {
-        gateway ! NotificationRequest(self, target, UserId(client.nickname), message)
+      val nickname = client.nickname
+      name.head match {
+        case '#' =>
+          val target = extractChannelName(name)
+          sendRoomRequest(client.joinedChannels, target) {
+            _ ! (isNotify match {
+              case false =>
+                MessageRequest(self, RoomId(target), UserId(nickname), message)
+              case true =>
+                NotificationRequest(self, RoomId(target), UserId(nickname), message)
+            })
+          }
+        case _ =>
+          // TODO
+          val target = name
+          gateway ! (isNotify match {
+            case false =>
+              MessageRequest(self, UserId(target), UserId(nickname), message)
+            case true =>
+              NotificationRequest(self, UserId(target), UserId(nickname), message)
+          })
       }
       None
     }
@@ -353,9 +369,9 @@ class IrcHandler(
           // do nothing because this client is not registered yet.
         case _ =>
           // broadcast unsubscribe message
-          client.joinedChannels.foreach { channel =>
-            gateway ! UnsubscribeRequest(
-              self, RoomId(channel), UserId(client.nickname), quitMessage)
+          val nickname = client.nickname
+          client.joinedChannels.foreach { case (name, roomRef) =>
+            roomRef ! UnsubscribeRequest(self, RoomId(name), UserId(nickname), quitMessage)
           }
 
           // notify service this client goes offline
@@ -386,6 +402,7 @@ class IrcHandler(
     case Event(res: SubscribeResponse, client) =>
       val nickname = client.nickname
       val channelName = res.room.name
+      val roomRef = res.sender
       send(clientPrefix, "JOIN", Seq(s"#$channelName"))
       res.topic match {
         case Some(topic) => // RPL_TOPIC
@@ -400,7 +417,7 @@ class IrcHandler(
       // RPL_ENDOFNAMES
       send(servername, "366", Seq(nickname, s"#$channelName", "End of NAMES list"))
 
-      stay using client.copy(joinedChannels = client.joinedChannels + channelName)
+      stay using client.copy(joinedChannels = client.joinedChannels + (channelName -> roomRef))
     case Event(res: UnsubscribeResponse, client) =>
       val channelName = res.room.name
       send(clientPrefix, "PART", Seq(s"#$channelName", res.message))
@@ -524,6 +541,21 @@ class IrcHandler(
       send(servername, "461", Seq(nickname, command, "Not enough parameters")) // ERR_NEEDMOREPARAMS
       None
     }
+
+  private[this] def extractChannelName(name: String) = name.head match {
+    case '#' => name.tail
+    case _ => name
+  }
+
+  private[this] def sendRoomRequest(
+      channels: Map[String, ActorRef], channel: String)(f: ActorRef => Unit) = {
+    channels.get(channel) match {
+      case Some(roomRef) => f(roomRef)
+      case _ =>
+        // ERR_NOSUCHCHANNEL
+        send(servername, "403", Seq(stateData.nickname, channel, "No such channel"))
+    }
+  }
 
   private[this] def userPrefix(nickname: String, host: String = "*") = s"$nickname!$nickname@$host"
 

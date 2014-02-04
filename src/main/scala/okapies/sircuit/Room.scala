@@ -46,7 +46,7 @@ class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
         addClient(user, sender)
         context watch sender
 
-        sender ! SubscribeResponse(roomId, prevUniqueMembers + user, topic)
+        sender ! SubscribeResponse(self, roomId, prevUniqueMembers + user, topic)
         if (isAdvertise) {
           val time = System.currentTimeMillis()
           val ad = ClientSubscribed(time, roomId, user)
@@ -67,10 +67,6 @@ class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
         if (isAdvertise) {
           clients.filter(_ != sender).foreach(_ ! ad)
         }
-      } else {
-        // NOTE: Send "no such room" instead of "not on the channel"
-        // not to expose what room exists.
-        sender ! NoSuchRoomError(roomId)
       }
       terminateIfNoMembers()
     case Terminated(listener) =>

@@ -19,14 +19,7 @@ class GatewayActor extends Actor with ActorLogging {
   private[this] val rooms = mutable.Map.empty[RoomId, ActorRef]
 
   def receive: Receive = {
-    case req: UnsubscribeRequest => req.target match {
-      case id: RoomId => rooms.get(id) match {
-        case Some(room) => room forward req
-        case None => req.sender ! NoSuchRoomError(id)
-      }
-      case _: UserId => // ignore
-    }
-    case req: Request => req.target match {
+    case req: SubscribeRequest => req.target match {
       case id: RoomId =>
         val room = rooms.get(id).getOrElse {
           log.info("Creating a room actor: {}", id.name)
@@ -36,10 +29,13 @@ class GatewayActor extends Actor with ActorLogging {
           room
         }
         room forward req
-      case UserId(name) => userActor forward req
+      case _ => // ignore
     }
-    case stat: ClientOnline => userActor forward stat
-    case stat: ClientOffline => userActor forward stat
+    case req: Request => req.target match {
+      case UserId(name) => userActor forward req
+      case _ => // ignore
+    }
+    case stat: ClientStatus => userActor forward stat
     case Terminated(room) =>
       rooms.find(_._2 == room).foreach { case (roomId, _) =>
         rooms -= roomId

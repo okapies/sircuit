@@ -51,6 +51,7 @@ case class UserInfoRequest(
 trait Response extends Event
 
 case class SubscribeResponse(
+  sender: ActorRef,
   room: RoomId,
   members: Set[UserId],
   topic: Option[String]) extends Response
@@ -65,19 +66,15 @@ case class NoSuchUserError(room: UserId) extends ErrorResponse
 
 case class NoSuchRoomError(room: RoomId) extends ErrorResponse
 
-trait UserStatus
+trait ClientStatus
 
 case class ClientOnline(
   sender: ActorRef,
-  user: UserId) extends UserStatus
-
-case class ClientAway(
-  sender: ActorRef,
-  user: UserId) extends UserStatus
+  user: UserId) extends ClientStatus
 
 case class ClientOffline(
   sender: ActorRef,
-  user: UserId) extends UserStatus
+  user: UserId) extends ClientStatus
 
 trait Advertisement extends Event
 
