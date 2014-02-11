@@ -40,10 +40,12 @@ object RestHandlerActor {
 }
 
 // per connection handler
-class RestHandlerActor(var connection: ActorRef, gateway: ActorRef)
+class RestHandlerActor(connection: ActorRef, gateway: ActorRef)
   extends Actor with ActorLogging with RestHandler {
 
-  var isHttp = true
+  private[this] var wsConnection: ActorRef = _
+
+  private[this] var isHttp = true
 
   // the HttpService trait defines only one abstract member, which
   // connects the services environment to the enclosing actor or test
@@ -63,17 +65,18 @@ class RestHandlerActor(var connection: ActorRef, gateway: ActorRef)
 
   private[this] def receiveWebSocket: Receive = {
     case Sockets.Upgraded =>
-      connection = sender
+      wsConnection = sender
+      context watch wsConnection
       isHttp = false
     case f @ Frame(fin, rsv, OpCode.Text, maskingKey, data) =>
-      connection ! Frame(
+      wsConnection ! Frame(
         opcode = OpCode.Text,
         data = ByteString(f.stringData.toUpperCase)
       )
-    case Tcp.Closed =>
+    case _: Tcp.ConnectionClosed =>
       log.info("WebSocket connection closed")
       context stop self
-    case Terminated(t) if t.path == connection.path =>
+    case Terminated(t) if t.path == connection.path || t.path == wsConnection.path =>
       log.info("WebSocket connection died")
       context stop self
   }
@@ -86,18 +89,17 @@ class RestHandlerActor(var connection: ActorRef, gateway: ActorRef)
     }
 
   private[this] def closeWebSocketConnection(statusCode: Short) =
-    connection ! Frame(
+    wsConnection ! Frame(
       opcode = OpCode.ConnectionClose,
       data = ByteString.newBuilder.putShort(statusCode)(BIG_ENDIAN).result()
     )
 
   override val supervisorStrategy =
     OneForOneStrategy() {
-      case e => {
+      case e =>
         complete(StatusCodes.InternalServerError, e.getMessage)
         closeGracefully()
         Stop
-      }
     }
 
   def sendMessageRequest(target: Identifier, origin: UserId, message: String) =
