@@ -1,10 +1,18 @@
 package okapies.sircuit.api.http
 
-import akka.actor.{Actor, ActorRef, Props}
-import spray.routing._
+import java.nio.ByteOrder.BIG_ENDIAN
+
+import akka.actor._
+import akka.actor.SupervisorStrategy.Stop
+import akka.io.Tcp
+import akka.util.ByteString
 import spray.http._
 import MediaTypes._
+import spray.routing._
+import spray.util.LoggingContext
 
+import spray.can.server.websockets.Sockets
+import spray.can.server.websockets.model.{Frame, OpCode}
 import okapies.sircuit._
 
 object RestInterfaceActor {
@@ -13,38 +21,104 @@ object RestInterfaceActor {
 
 }
 
-// we don't implement our route structure directly in the service actor because
-// we want to be able to test it independently, without having to spin up an actor
-class RestInterfaceActor(gateway: ActorRef) extends Actor with RestInterface {
+class RestInterfaceActor(gateway: ActorRef) extends Actor with ActorLogging {
+
+  def receive = {
+    case msg: Tcp.Connected =>
+      // create per connection handler
+      val handler = context.actorOf(RestHandlerActor.props(sender, gateway))
+      handler forward msg // to register handler in runRoute()
+  }
+
+}
+
+object RestHandlerActor {
+
+  def props(connection: ActorRef, gateway: ActorRef) =
+    Props(classOf[RestHandlerActor], connection, gateway)
+
+}
+
+// per connection handler
+class RestHandlerActor(var connection: ActorRef, gateway: ActorRef)
+  extends Actor with ActorLogging with RestHandler {
+
+  var isHttp = true
 
   // the HttpService trait defines only one abstract member, which
   // connects the services environment to the enclosing actor or test
   def actorRefFactory = context
 
-  // this actor only runs our route, but you could add
-  // other things here, like request stream processing
-  // or timeout handling
+  // watches for when the connection dies without sending ConnectionClose message
+  context watch connection
+
   def receive = runRoute(route)
 
-  def sendMessage(target: Identifier, origin: UserId, message: String) =
+  override def onConnectionClosed(ev: Tcp.ConnectionClosed) = context stop self
+
+  def upgradeToWebSocket(reqCtx: RequestContext) = {
+    context become receiveWebSocket
+    connection ! Sockets.UpgradeServer(Sockets.acceptAllFunction(reqCtx.request), self)
+  }
+
+  private[this] def receiveWebSocket: Receive = {
+    case Sockets.Upgraded =>
+      connection = sender
+      isHttp = false
+    case f @ Frame(fin, rsv, OpCode.Text, maskingKey, data) =>
+      connection ! Frame(
+        opcode = OpCode.Text,
+        data = ByteString(f.stringData.toUpperCase)
+      )
+    case Tcp.Closed =>
+      log.info("WebSocket connection closed")
+      context stop self
+    case Terminated(t) if t.path == connection.path =>
+      log.info("WebSocket connection died")
+      context stop self
+  }
+
+  def closeGracefully() =
+    if (isHttp) {
+      connection ! Tcp.Close
+    } else {
+      closeWebSocketConnection(1000)
+    }
+
+  private[this] def closeWebSocketConnection(statusCode: Short) =
+    connection ! Frame(
+      opcode = OpCode.ConnectionClose,
+      data = ByteString.newBuilder.putShort(statusCode)(BIG_ENDIAN).result()
+    )
+
+  override val supervisorStrategy =
+    OneForOneStrategy() {
+      case e => {
+        complete(StatusCodes.InternalServerError, e.getMessage)
+        closeGracefully()
+        Stop
+      }
+    }
+
+  def sendMessageRequest(target: Identifier, origin: UserId, message: String) =
     gateway ! MessageRequest(self, target, origin, message)
 
-  def sendNotification(target: Identifier, origin: UserId, message: String) =
+  def sendNotificationRequest(target: Identifier, origin: UserId, message: String) =
     gateway ! NotificationRequest(self, target, origin, message)
 
 }
 
 // this trait defines our service behavior independently from the service actor
-trait RestInterface extends HttpService {
+trait RestHandler extends HttpService {
 
   val route = roomRoute
 
-  def roomRoute: Route =
+  def roomRoute(implicit log: LoggingContext): Route =
     path("room" / Segment / "message") { roomId =>
       ((get | put) & parameters('auth_token, 'message)) { (auth_token, message) =>
         respondWithMediaType(`application/json`) {
           complete {
-            sendMessage(RoomId(roomId), UserId(auth_token), message)
+            sendMessageRequest(RoomId(roomId), UserId(auth_token), message)
             "{result: \"ok\"}"
           }
         }
@@ -54,15 +128,29 @@ trait RestInterface extends HttpService {
       ((get | put) & parameters('auth_token, 'message)) { (auth_token, message) =>
         respondWithMediaType(`application/json`) {
           complete {
-            sendMessage(RoomId(roomId), UserId(auth_token), message)
+            sendMessageRequest(RoomId(roomId), UserId(auth_token), message)
             "{result: \"ok\"}"
           }
         }
       }
+    } ~
+    (path("stream") & get) { ctx =>
+      upgradeToWebSocket(ctx)
     }
 
-  def sendMessage(target: Identifier, origin: UserId, message: String): Unit
+  override def complete = marshallable => new StandardRoute {
+    override def apply(ctx: RequestContext) = {
+      ctx.complete(marshallable)
+      closeGracefully()
+    }
+  }
 
-  def sendNotification(target: Identifier, origin: UserId, message: String): Unit
+  def upgradeToWebSocket(ctx: RequestContext): Unit
+
+  def closeGracefully(): Unit
+
+  def sendMessageRequest(target: Identifier, origin: UserId, message: String): Unit
+
+  def sendNotificationRequest(target: Identifier, origin: UserId, message: String): Unit
 
 }

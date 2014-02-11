@@ -11,7 +11,7 @@ object SircuitBuild extends Build {
   import AssemblyKeys._
 
   lazy val root = Project(id = "sircuit-server", base = file("."))
-    .dependsOn(uri("https://github.com/okapies/SprayWebSockets.git"))
+    .dependsOn(uri("https://github.com/okapies/SprayWebSockets.git#2a68215"))
     .settings(Project.defaultSettings: _*)
     .settings(Revolver.settings: _*)
     .settings(assemblySettings: _*)

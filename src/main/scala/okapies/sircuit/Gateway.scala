@@ -32,8 +32,8 @@ class GatewayActor extends Actor with ActorLogging {
       case _ => // ignore
     }
     case req: Request => req.target match {
+      case id: RoomId => rooms.get(id).foreach(_ forward req)
       case UserId(name) => userActor forward req
-      case _ => // ignore
     }
     case stat: ClientStatus => userActor forward stat
     case Terminated(room) =>

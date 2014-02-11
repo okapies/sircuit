@@ -3,6 +3,7 @@ package okapies.sircuit
 import akka.actor.ActorSystem
 import akka.io.IO
 import spray.can.Http
+import spray.can.server.websockets.Sockets
 
 import api.http.RestInterfaceActor
 import api.irc.IrcInterfaceActor
@@ -18,7 +19,7 @@ object Boot extends App {
   // REST interface
   val restInterface = system.actorOf(RestInterfaceActor.props(gateway), "rest-api")
 
-  IO(Http) ! Http.Bind(restInterface, interface = "0.0.0.0", port = 8080)
+  IO(Sockets) ! Http.Bind(restInterface, interface = "0.0.0.0", port = 8080)
 
   // IRC interface
   val ircInterface = system.actorOf(IrcInterfaceActor.props(gateway), "irc-api")
