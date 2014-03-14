@@ -13,7 +13,7 @@ object SircuitBuild extends Build {
   // sbt-atmos for Typesafe Console
   import com.typesafe.sbt.SbtAtmos.{Atmos, atmosSettings, traceAkka}
 
-  val akkaVersion = "2.2.3"
+  val akkaVersion = "2.2.4"
   val sprayVersion = "1.2.0"
 
   lazy val root = Project(id = "sircuit-server", base = file("."))
