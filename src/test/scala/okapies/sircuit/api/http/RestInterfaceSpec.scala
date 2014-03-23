@@ -7,8 +7,9 @@ import spray.http._
 import StatusCodes._
 
 import okapies.sircuit.{Identifier, UserId}
+import spray.routing.RequestContext
 
-class RestInterfaceSpec extends FlatSpec with Matchers with ScalatestRouteTest with RestInterface {
+class RestInterfaceSpec extends FlatSpec with Matchers with ScalatestRouteTest with RestHandler {
 
   def actorRefFactory = system
   
@@ -35,8 +36,12 @@ class RestInterfaceSpec extends FlatSpec with Matchers with ScalatestRouteTest w
   }
 */
 
-  def sendMessage(target: Identifier, origin: UserId, message: String) = ???
+  def upgradeToWebSocket(ctx: RequestContext) = ???
 
-  def sendNotification(target: Identifier, origin: UserId, message: String) = ???
+  def closeGracefully() = ???
+
+  def sendMessageRequest(target: Identifier, origin: UserId, message: String) = ???
+
+  def sendNotificationRequest(target: Identifier, origin: UserId, message: String) = ???
 
 }
