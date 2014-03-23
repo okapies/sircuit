@@ -14,7 +14,7 @@ object SircuitBuild extends Build {
   import com.typesafe.sbt.SbtAtmos.{Atmos, atmosSettings, traceAkka}
 
   val akkaVersion = "2.2.4"
-  val sprayVersion = "1.2.0"
+  val sprayVersion = "1.2.1"
 
   lazy val root = Project(id = "sircuit-server", base = file("."))
     .dependsOn(uri("https://github.com/okapies/SprayWebSockets.git#2a68215"))
@@ -25,7 +25,7 @@ object SircuitBuild extends Build {
       organization  := "sircuit",
       name          := "sircuit-server",
       version       := "0.1.0",
-      scalaVersion  := "2.10.3",
+      scalaVersion  := "2.10.4",
       scalacOptions := Seq("-unchecked", "-deprecation", "-encoding", "utf8"),
       resolvers ++= Seq(
         "Typesafe repository" at "http://repo.typesafe.com/typesafe/releases/",
@@ -38,7 +38,7 @@ object SircuitBuild extends Build {
           "io.spray"            %   "spray-can"     % sprayVersion,
           "io.spray"            %   "spray-routing" % sprayVersion,
           "io.spray"            %   "spray-testkit" % sprayVersion,
-          "org.scalatest"       %%  "scalatest"     % "2.0" % "test"
+          "org.scalatest"       %%  "scalatest"     % "2.1.2" % "test"
         )
       },
       mainClass in assembly := Some("okapies.sircuit.Boot"),
