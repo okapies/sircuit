@@ -38,7 +38,9 @@ object SircuitBuild extends Build {
           "io.spray"            %   "spray-can"     % sprayVersion,
           "io.spray"            %   "spray-routing" % sprayVersion,
           "io.spray"            %   "spray-testkit" % sprayVersion,
-          "org.scalatest"       %%  "scalatest"     % "2.1.2" % "test"
+          "com.typesafe.slick"  %%  "slick"         % "2.0.1",
+          "com.h2database"      %   "h2"            % "1.4.177",
+          "org.scalatest"       %%  "scalatest"     % "2.1.5" % "test"
         )
       },
       mainClass in assembly := Some("okapies.sircuit.Boot"),
