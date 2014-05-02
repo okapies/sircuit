@@ -16,30 +16,30 @@ class GatewayActor extends Actor with ActorLogging {
 
   private[this] val userActor = context.actorOf(UserActor.props())
 
-  private[this] val rooms = mutable.Map.empty[RoomId, ActorRef]
+  private[this] val channels = mutable.Map.empty[ChannelId, ActorRef]
 
   def receive: Receive = {
     case req: SubscribeRequest => req.target match {
-      case id: RoomId =>
-        val room = rooms.get(id).getOrElse {
-          log.info("Creating a room actor: {}", id.name)
-          val room = context.actorOf(RoomActor.props(id))
-          rooms += id -> room
-          context watch room
-          room
+      case id: ChannelId =>
+        val channel = channels.get(id).getOrElse {
+          log.info("Creating a channel actor: {}", id.name)
+          val channel = context.actorOf(ChannelActor.props(id))
+          channels += id -> channel
+          context watch channel
+          channel
         }
-        room forward req
+        channel forward req
       case _ => // ignore
     }
     case req: Request => req.target match {
-      case id: RoomId => rooms.get(id).foreach(_ forward req)
+      case id: ChannelId => channels.get(id).foreach(_ forward req)
       case UserId(name) => userActor forward req
     }
     case stat: ClientStatus => userActor forward stat
-    case Terminated(room) =>
-      rooms.find(_._2 == room).foreach { case (roomId, _) =>
-        rooms -= roomId
-        log.info("A room actor was terminated: {}", roomId.name)
+    case Terminated(channel) =>
+      channels.find(_._2 == channel).foreach { case (channelId, _) =>
+        channels -= channelId
+        log.info("A channel actor was terminated: {}", channelId.name)
       }
   }
 

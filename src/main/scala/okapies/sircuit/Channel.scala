@@ -5,13 +5,13 @@ import scala.collection.mutable
 
 import akka.actor._
 
-object RoomActor {
+object ChannelActor {
 
-  def props(id: RoomId) = Props(classOf[RoomActor], id)
+  def props(id: ChannelId) = Props(classOf[ChannelActor], id)
 
 }
 
-class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
+class ChannelActor(channelId: ChannelId) extends Actor with ActorLogging {
 
   private[this] val members = mutable.Map.empty[UserId, immutable.Set[ActorRef]]
 
@@ -22,20 +22,20 @@ class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
   def receive: Receive = {
     case req: MessageRequest =>
       val time = System.currentTimeMillis()
-      val message = Message(time, req.origin, roomId, req.message)
+      val message = Message(time, req.origin, channelId, req.message)
       clients.filter(_ != req.sender).foreach(_ ! message)
     case req: NotificationRequest =>
       val time = System.currentTimeMillis()
-      val notification = Notification(time, req.origin, roomId, req.message)
+      val notification = Notification(time, req.origin, channelId, req.message)
       clients.filter(_ != req.sender).foreach(_ ! notification)
     case req: UpdateTopicRequest =>
       // TODO: authorization required
       val time = System.currentTimeMillis()
       topic = req.topic
-      clients.foreach(_ ! TopicStatus(time, roomId, req.user, req.topic))
+      clients.foreach(_ ! TopicStatus(time, channelId, req.user, req.topic))
     case req: UserInfoRequest =>
       val time = System.currentTimeMillis()
-      req.sender ! RoomMembers(time, roomId, members.keys.map(userId => UserInfo(userId)).toSet)
+      req.sender ! ChannelMembers(time, channelId, members.keys.map(userId => UserInfo(userId)).toSet)
     case req: SubscribeRequest =>
       val sender = req.sender
       val user = req.user
@@ -46,10 +46,10 @@ class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
         addClient(user, sender)
         context watch sender
 
-        sender ! SubscribeResponse(self, roomId, prevUniqueMembers + user, topic)
+        sender ! SubscribeResponse(self, channelId, prevUniqueMembers + user, topic)
         if (isAdvertise) {
           val time = System.currentTimeMillis()
-          val ad = ClientSubscribed(time, roomId, user)
+          val ad = ClientSubscribed(time, channelId, user)
           clients.filter(_ != sender).foreach(_ ! ad)
         }
       }
@@ -60,9 +60,9 @@ class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
         removeClient(user, sender)
         context unwatch sender
 
-        sender ! UnsubscribeResponse(roomId, req.message)
+        sender ! UnsubscribeResponse(channelId, req.message)
         val time = System.currentTimeMillis()
-        val ad = ClientUnsubscribed(time, roomId, user, req.message)
+        val ad = ClientUnsubscribed(time, channelId, user, req.message)
         val isAdvertise = !members.contains(user)
         if (isAdvertise) {
           clients.filter(_ != sender).foreach(_ ! ad)
@@ -76,7 +76,7 @@ class RoomActor(roomId: RoomId) extends Actor with ActorLogging {
         val isAdvertise = !members.contains(user)
         if (isAdvertise) {
           val time = System.currentTimeMillis()
-          val ad = ClientUnsubscribed(time, roomId, user, "Connection reset by peer")
+          val ad = ClientUnsubscribed(time, channelId, user, "Connection reset by peer")
           clients.foreach(_ ! ad)
         }
       }

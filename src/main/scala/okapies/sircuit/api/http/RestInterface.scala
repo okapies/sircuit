@@ -113,24 +113,24 @@ class RestHandlerActor(connection: ActorRef, gateway: ActorRef)
 // this trait defines our service behavior independently from the service actor
 trait RestHandler extends HttpService {
 
-  val route = roomRoute
+  val route = channelRoute
 
-  def roomRoute(implicit log: LoggingContext): Route =
-    path("room" / Segment / "message") { roomId =>
+  def channelRoute(implicit log: LoggingContext): Route =
+    path("channel" / Segment / "message") { chnnelId =>
       ((get | put) & parameters('auth_token, 'message)) { (auth_token, message) =>
         respondWithMediaType(`application/json`) {
           complete {
-            sendMessageRequest(RoomId(roomId), UserId(auth_token), message)
+            sendMessageRequest(ChannelId(chnnelId), UserId(auth_token), message)
             "{result: \"ok\"}"
           }
         }
       }
     } ~
-    path("room" / Segment / "notification") { roomId =>
+    path("channel" / Segment / "notification") { channelId =>
       ((get | put) & parameters('auth_token, 'message)) { (auth_token, message) =>
         respondWithMediaType(`application/json`) {
           complete {
-            sendMessageRequest(RoomId(roomId), UserId(auth_token), message)
+            sendMessageRequest(ChannelId(channelId), UserId(auth_token), message)
             "{result: \"ok\"}"
           }
         }

@@ -6,7 +6,7 @@ sealed trait Identifier
 
 case class UserId(name: String) extends Identifier
 
-case class RoomId(name: String) extends Identifier
+case class ChannelId(name: String) extends Identifier
 
 trait Event
 
@@ -52,19 +52,19 @@ trait Response extends Event
 
 case class SubscribeResponse(
   sender: ActorRef,
-  room: RoomId,
+  channel: ChannelId,
   members: Set[UserId],
   topic: Option[String]) extends Response
 
 case class UnsubscribeResponse(
-  room: RoomId,
+  channel: ChannelId,
   message: String) extends Response
 
 trait ErrorResponse extends Response
 
-case class NoSuchUserError(room: UserId) extends ErrorResponse
+case class NoSuchUserError(channel: UserId) extends ErrorResponse
 
-case class NoSuchRoomError(room: RoomId) extends ErrorResponse
+case class NoSuchChannelError(channel: ChannelId) extends ErrorResponse
 
 trait ClientStatus
 
@@ -92,25 +92,25 @@ case class Notification(
 
 case class ClientSubscribed(
   time: Long,
-  room: RoomId,
+  channel: ChannelId,
   user: UserId) extends Advertisement
 
 case class ClientUnsubscribed(
   time: Long,
-  room: RoomId,
+  channel: ChannelId,
   user: UserId,
   message: String) extends Advertisement
 
 case class TopicStatus(
   time: Long,
-  room: RoomId,
+  channel: ChannelId,
   user: UserId,
   topic: Option[String]
 ) extends Advertisement
 
 case class UserInfo(id: UserId)
 
-case class RoomMembers(
+case class ChannelMembers(
   time: Long,
-  room: RoomId,
+  channel: ChannelId,
   members: Set[UserInfo]) extends Advertisement

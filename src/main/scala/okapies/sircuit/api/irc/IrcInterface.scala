@@ -242,7 +242,7 @@ class IrcHandler(
         channels.foreach { channel => channel.head match {
           case '#' =>
             val target = channel.tail
-            gateway ! SubscribeRequest(self, RoomId(target), UserId(nickname))
+            gateway ! SubscribeRequest(self, ChannelId(target), UserId(nickname))
           case _ =>
             // ERR_NOSUCHCHANNEL
             send(servername, "403", Seq(nickname, channel, "No such channel"))
@@ -257,8 +257,8 @@ class IrcHandler(
         val message = params.applyOrElse(1, (_: Int) => "")
         channels.foreach { channel =>
           val target = extractChannelName(channel)
-          sendRoomRequest(client.joinedChannels, target) {
-            _ ! UnsubscribeRequest(self, RoomId(target), UserId(client.nickname), message)
+          sendChannelRequest(client.joinedChannels, target) {
+            _ ! UnsubscribeRequest(self, ChannelId(target), UserId(client.nickname), message)
           }
         }
         None
@@ -304,8 +304,8 @@ class IrcHandler(
       validate("TOPIC", params, min = 1) {
         val target = extractChannelName(params(0))
         val topic = Option(params.applyOrElse(1, (_: Int) => null))
-        sendRoomRequest(client.joinedChannels, target) {
-          _ ! UpdateTopicRequest(self, RoomId(target), UserId(client.nickname), topic)
+        sendChannelRequest(client.joinedChannels, target) {
+          _ ! UpdateTopicRequest(self, ChannelId(target), UserId(client.nickname), topic)
         }
         None
       }
@@ -316,8 +316,8 @@ class IrcHandler(
         mask.head match {
           case '#' =>
             val target = extractChannelName(mask)
-            sendRoomRequest(client.joinedChannels, target) {
-              _ ! UserInfoRequest(self, RoomId(target))
+            sendChannelRequest(client.joinedChannels, target) {
+              _ ! UserInfoRequest(self, ChannelId(target))
             }
           case _ =>
             val target = mask
@@ -337,12 +337,12 @@ class IrcHandler(
       name.head match {
         case '#' =>
           val target = extractChannelName(name)
-          sendRoomRequest(client.joinedChannels, target) {
+          sendChannelRequest(client.joinedChannels, target) {
             _ ! (isNotify match {
               case false =>
-                MessageRequest(self, RoomId(target), UserId(nickname), message)
+                MessageRequest(self, ChannelId(target), UserId(nickname), message)
               case true =>
-                NotificationRequest(self, RoomId(target), UserId(nickname), message)
+                NotificationRequest(self, ChannelId(target), UserId(nickname), message)
             })
           }
         case _ =>
@@ -370,8 +370,8 @@ class IrcHandler(
         case _ =>
           // broadcast unsubscribe message
           val nickname = client.nickname
-          client.joinedChannels.foreach { case (name, roomRef) =>
-            roomRef ! UnsubscribeRequest(self, RoomId(name), UserId(nickname), quitMessage)
+          client.joinedChannels.foreach { case (name, chRef) =>
+            chRef ! UnsubscribeRequest(self, ChannelId(name), UserId(nickname), quitMessage)
           }
 
           // notify service this client goes offline
@@ -401,8 +401,8 @@ class IrcHandler(
   private[this] def handleIrcCommandResponse: StateFunction = {
     case Event(res: SubscribeResponse, client) =>
       val nickname = client.nickname
-      val channelName = res.room.name
-      val roomRef = res.sender
+      val channelName = res.channel.name
+      val chRef = res.sender
       send(clientPrefix, "JOIN", Seq(s"#$channelName"))
       res.topic match {
         case Some(topic) => // RPL_TOPIC
@@ -417,14 +417,14 @@ class IrcHandler(
       // RPL_ENDOFNAMES
       send(servername, "366", Seq(nickname, s"#$channelName", "End of NAMES list"))
 
-      stay using client.copy(joinedChannels = client.joinedChannels + (channelName -> roomRef))
+      stay using client.copy(joinedChannels = client.joinedChannels + (channelName -> chRef))
     case Event(res: UnsubscribeResponse, client) =>
-      val channelName = res.room.name
+      val channelName = res.channel.name
       send(clientPrefix, "PART", Seq(s"#$channelName", res.message))
       stay using client.copy(joinedChannels = client.joinedChannels - channelName)
-    case Event(res: NoSuchRoomError, client) =>
+    case Event(res: NoSuchChannelError, client) =>
       // ERR_NOSUCHCHANNEL
-      send(servername, "403", Seq(client.nickname, res.room.name, "No such channel"))
+      send(servername, "403", Seq(client.nickname, res.channel.name, "No such channel"))
       stay()
   }
 
@@ -432,33 +432,33 @@ class IrcHandler(
     case Event(ad: Message, client) =>
       val target = ad.target match {
         case UserId(name) => name
-        case RoomId(name) => s"#$name"
+        case ChannelId(name) => s"#$name"
       }
       send(userPrefix(ad.origin.name), "PRIVMSG", Seq(target, ad.message))
       stay()
     case Event(ad: Notification, client) =>
       val target = ad.target match {
         case UserId(name) => name
-        case RoomId(name) => s"#$name"
+        case ChannelId(name) => s"#$name"
       }
       send(userPrefix(ad.origin.name), "NOTICE", Seq(target, ad.message))
       stay()
     case Event(ad: ClientSubscribed, client) =>
-      send(userPrefix(ad.user.name), "JOIN", Seq(s"#${ad.room.name}"))
+      send(userPrefix(ad.user.name), "JOIN", Seq(s"#${ad.channel.name}"))
       stay()
     case Event(ad: ClientUnsubscribed, client) =>
-      send(userPrefix(ad.user.name), "PART", Seq(s"#${ad.room.name}", ad.message))
+      send(userPrefix(ad.user.name), "PART", Seq(s"#${ad.channel.name}", ad.message))
       stay()
     case Event(ad: TopicStatus, client) =>
       ad.topic match {
         case Some(topic) =>
-          send(userPrefix(ad.user.name), "TOPIC", Seq(s"#${ad.room.name}", topic))
+          send(userPrefix(ad.user.name), "TOPIC", Seq(s"#${ad.channel.name}", topic))
         case None =>
-          send(userPrefix(ad.user.name), "TOPIC", Seq(s"#${ad.room.name}"))
+          send(userPrefix(ad.user.name), "TOPIC", Seq(s"#${ad.channel.name}"))
       }
       stay()
-    case Event(ad: RoomMembers, client) =>
-      val channelName = s"#${ad.room.name}"
+    case Event(ad: ChannelMembers, client) =>
+      val channelName = s"#${ad.channel.name}"
       ad.members foreach { member =>
         val nickname = member.id.name
         // RPL_WHOREPLY
@@ -547,10 +547,10 @@ class IrcHandler(
     case _ => name
   }
 
-  private[this] def sendRoomRequest(
+  private[this] def sendChannelRequest(
       channels: Map[String, ActorRef], channel: String)(f: ActorRef => Unit) = {
     channels.get(channel) match {
-      case Some(roomRef) => f(roomRef)
+      case Some(chRef) => f(chRef)
       case _ =>
         // ERR_NOSUCHCHANNEL
         send(servername, "403", Seq(stateData.nickname, channel, "No such channel"))

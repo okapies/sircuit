@@ -43,7 +43,7 @@ sircuit {
 - SSL support
 - Authentication and authorization
 - Message logging and retrieval
-- Global/room-specific setting
+- Global/channel-specific setting
 - Pluggable chatbot
 - Notification support
 - Servlet container support
